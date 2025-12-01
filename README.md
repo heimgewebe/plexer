@@ -1,48 +1,35 @@
 # plexer
 
-A TypeScript-based Express application.
+Plexer ist das Ereignisnetz (Event Router) für den Heimgewebe-Organismus.
 
-## Getting Started
+- Nimmt Events über `POST /events` im Heimgewebe-Format entgegen
+- Prüft Minimalstruktur (`type`, `source`, `payload`)
+- Loggt eingehende Events
+- Leitet sie an Heimgeist weiter (und später an weitere Konsumenten)
 
-### Prerequisites
+## Scope
 
-- Node.js (v16 or higher)
-- npm or yarn
+Plexer kümmert sich ausschließlich um **Eventtransport**.
 
-### Installation
+Plexer tut:
 
-```bash
-npm install
-```
+- Events entgegennehmen (`POST /events`)
+- Minimalstruktur prüfen
+- Events protokollieren
+- Events an Konsumenten weiterreichen (Heimgeist, semantAH, weitere Dienste)
 
-### Development
+Plexer tut **nicht**:
 
-```bash
-npm run dev
-```
+- PR-Kommentare entgegennehmen
+- PR-Kommandos parsen
+- mit der GitHub-API sprechen
+- als Bot oder Reviewer agieren
+- Chat- oder Dialogflüsse steuern
 
-### Build
+PR-Kommandos bleiben weiterhin auf dem Weg:
 
-```bash
-npm run build
-```
+GitHub PR Kommentar → Dispatcher → Ziel-Tool
+(z. B. Sichter, WGX, Heimgeist, Heimlern)
 
-### Production
-
-```bash
-npm run build
-npm start
-```
-
-## Configuration
-
-The application can be configured using environment variables:
-
-- `PORT` - Server port (default: 3000)
-- `HOST` - Server host (default: 0.0.0.0)
-- `NODE_ENV` - Environment (default: development)
-
-## API Endpoints
-
-- `GET /` - Welcome message
-- `GET /health` - Health check endpoint
+Damit bleibt Plexer ein schlanker Event-Router und kann unabhängig von
+den Kommando-Workflows skaliert oder ausgetauscht werden.
