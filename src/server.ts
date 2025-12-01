@@ -8,7 +8,7 @@ export function createServer(): Express {
 
   app.get('/', (req: Request, res: Response) => {
     res.json({
-      message: 'Welcome to Heimplex',
+      message: 'Welcome to plexer',
       environment: config.environment,
     });
   });
