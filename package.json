@@ -1,7 +1,7 @@
 {
-  "name": "heimplex",
+  "name": "plexer",
   "version": "1.0.0",
-  "description": "Heimplex application",
+  "description": "plexer application",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
