@@ -7,6 +7,8 @@ interface IncomingEvent {
   payload: unknown;
 }
 
+const MAX_STRING_LENGTH = 256;
+
 export function createServer(): Express {
   const app = express();
 
@@ -49,20 +51,32 @@ export function createServer(): Express {
       if (
         typeof type !== 'string' ||
         !type.trim() ||
+        type.length > MAX_STRING_LENGTH ||
         typeof source !== 'string' ||
         !source.trim() ||
+        source.length > MAX_STRING_LENGTH ||
         typeof payload === 'undefined'
       ) {
         return res.status(400).json({
           status: 'error',
-          message: 'Event must include non-empty type & source and payload',
+          message: `Event must include non-empty type & source (max ${MAX_STRING_LENGTH} chars) and payload`,
         });
       }
 
-      const payloadPreview =
-        typeof payload === 'string' && payload.length > 200
-          ? `${payload.slice(0, 200)}…`
-          : payload;
+      let payloadPreview = payload;
+      try {
+        if (typeof payload === 'object' && payload !== null) {
+          payloadPreview = JSON.stringify(payload);
+        } else {
+          payloadPreview = String(payload);
+        }
+
+        if (typeof payloadPreview === 'string' && payloadPreview.length > 200) {
+          payloadPreview = `${payloadPreview.slice(0, 200)}…`;
+        }
+      } catch (e) {
+        payloadPreview = '[Circular or invalid payload]';
+      }
 
       console.log('Received event', {
         type: type.trim(),
@@ -85,4 +99,3 @@ export function createServer(): Express {
 
   return app;
 }
-
