@@ -26,10 +26,25 @@ export function createServer(): Express {
   app.post(
     '/events',
     (
-      req: Request<unknown, unknown, Partial<IncomingEvent>>,
+      req: Request<unknown, unknown, unknown>,
       res: Response,
     ) => {
-      const { type, source, payload } = req.body ?? {};
+      const body = req.body;
+
+      if (
+        !body ||
+        typeof body !== 'object' ||
+        !('type' in body) ||
+        !('source' in body) ||
+        !('payload' in body)
+      ) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Event must include non-empty type & source and payload',
+        });
+      }
+
+      const { type, source, payload } = body as Record<string, unknown>;
 
       if (
         typeof type !== 'string' ||
@@ -71,22 +86,3 @@ export function createServer(): Express {
   return app;
 }
 
-export function startServer(): void {
-  const app = createServer();
-
-  const server = app.listen(config.port, config.host, () => {
-    console.log(`Server is running on http://${config.host}:${config.port}`);
-    console.log(`Environment: ${config.environment}`);
-  });
-
-  const shutdown = () => {
-    console.log('Shutting down server...');
-    server.close(() => {
-      console.log('Server closed');
-      process.exit(0);
-    });
-  };
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
-}
