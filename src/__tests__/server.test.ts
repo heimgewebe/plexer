@@ -75,5 +75,27 @@ describe('Server', () => {
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(400);
     });
+
+    it('should reject very long type', async () => {
+      const payload = {
+        type: 'a'.repeat(257),
+        source: 'test-suite',
+        payload: {},
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(400);
+    });
+
+    it('should reject very long source', async () => {
+      const payload = {
+        type: 'test.event',
+        source: 'a'.repeat(257),
+        payload: {},
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(400);
+    });
   });
 });
