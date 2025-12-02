@@ -1,0 +1,23 @@
+wgx:
+  apiVersion: v1
+  requiredWgx: "^2.0.0"
+  repoKind: node-service
+
+  tooling:
+    shell:
+      default: bash
+    node:
+      packageManager: npm
+
+  tasks:
+    up: "npm install"
+
+    smoke: |
+      set -euo pipefail
+      echo "[wgx.smoke] TypeScript-Build für plexer"
+      if command -v npm >/dev/null 2>&1; then
+        npm run build
+      else
+        echo "[wgx.smoke] npm nicht verfügbar – übersprungen"
+      fi
+

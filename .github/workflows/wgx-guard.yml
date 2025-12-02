@@ -1,0 +1,34 @@
+---
+name: wgx-guard
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+"on":
+  pull_request:
+    paths:
+      - ".wgx/**"
+      - ".github/workflows/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "src/**"
+  push:
+    branches: [main]
+    paths:
+      - ".wgx/**"
+      - ".github/workflows/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "src/**"
+  workflow_dispatch:
+
+jobs:
+  guard:
+    name: "WGX guard (central)"
+    uses: heimgewebe/wgx/.github/workflows/wgx-guard.yml@main
