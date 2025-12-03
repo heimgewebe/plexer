@@ -42,7 +42,7 @@ export function createServer(): Express {
       ) {
         return res.status(400).json({
           status: 'error',
-          message: 'Event must include non-empty type & source and payload',
+          message: 'Event must include type, source and payload',
         });
       }
 

@@ -3,7 +3,7 @@
 Plexer ist das Ereignisnetz (Event Router) für den Heimgewebe-Organismus.
 
 - Nimmt Events über `POST /events` im Heimgewebe-Format entgegen
-- Prüft Minimalstruktur (`type`, `source`, `payload`)
+- Prüft Minimalstruktur (`type`, `source`, `payload`; `type`/`source` max. 256 Zeichen)
 - Loggt eingehende Events
 - Leitet sie an Heimgeist weiter (und später an weitere Konsumenten)
 
