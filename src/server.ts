@@ -71,8 +71,8 @@ export function createServer(): Express {
           payloadPreview = String(payload);
         }
 
-        if (typeof payloadPreview === 'string' && payloadPreview.length > 200) {
-          payloadPreview = `${payloadPreview.slice(0, 200)}…`;
+        if (typeof payloadPreview === 'string' && payloadPreview.length > 100) {
+          payloadPreview = `${payloadPreview.slice(0, 100)}…`;
         }
       } catch (e) {
         payloadPreview = '[Circular or invalid payload]';
@@ -83,6 +83,27 @@ export function createServer(): Express {
         source: source.trim(),
         payload: payloadPreview,
       });
+
+      // Forward to Heimgeist if configured (Fire and Forget)
+      if (config.heimgeistUrl) {
+        fetch(config.heimgeistUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ type, source, payload }),
+        })
+          .then((response) => {
+            if (!response.ok) {
+              console.error(
+                `Failed to forward event to Heimgeist: ${response.status} ${response.statusText}`,
+              );
+            }
+          })
+          .catch((error) => {
+            console.error('Error forwarding event to Heimgeist:', error);
+          });
+      }
 
       res.status(202).json({ status: 'accepted' });
     },
