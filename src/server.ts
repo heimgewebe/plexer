@@ -110,7 +110,21 @@ export function createServer(): Express {
   );
 
   // Global error handler
-  app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  app.use((err: Error & { status?: number }, req: Request, res: Response, next: NextFunction) => {
+    if (err instanceof SyntaxError && 'body' in err) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid JSON',
+      });
+    }
+
+    if (err.status === 413) {
+      return res.status(413).json({
+        status: 'error',
+        message: 'Payload Too Large',
+      });
+    }
+
     console.error(err.stack);
     res.status(500).json({
       status: 'error',
