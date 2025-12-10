@@ -63,6 +63,9 @@ export function createServer(): Express {
         });
       }
 
+      const normalizedType = type.trim();
+      const normalizedSource = source.trim();
+
       let payloadPreview = payload;
       try {
         if (typeof payload === 'object' && payload !== null) {
@@ -79,8 +82,8 @@ export function createServer(): Express {
       }
 
       console.log('Received event', {
-        type: type.trim(),
-        source: source.trim(),
+        type: normalizedType,
+        source: normalizedSource,
         payload: payloadPreview,
       });
 
@@ -91,7 +94,11 @@ export function createServer(): Express {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ type, source, payload }),
+          body: JSON.stringify({
+            type: normalizedType,
+            source: normalizedSource,
+            payload,
+          }),
         })
           .then((response) => {
             if (!response.ok) {
