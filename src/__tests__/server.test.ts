@@ -104,6 +104,37 @@ describe('Server', () => {
       );
     });
 
+    it('should trim whitespace from type and source before forwarding', async () => {
+      const payload = {
+        type: '   padded.event  ',
+        source: '  padded-source ',
+        payload: { foo: 'bar' },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type: 'padded.event',
+          source: 'padded-source',
+          payload: { foo: 'bar' },
+        }),
+      });
+
+      expect(console.log).toHaveBeenCalledWith(
+        'Received event',
+        expect.objectContaining({
+          type: 'padded.event',
+          source: 'padded-source',
+        }),
+      );
+    });
+
     it('should handle heimgeist failure gracefully (fire and forget)', async () => {
        fetchMock.mockRejectedValueOnce(new Error('Network error'));
 
