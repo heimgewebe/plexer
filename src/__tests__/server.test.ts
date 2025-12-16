@@ -216,5 +216,21 @@ describe('Server', () => {
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(400);
     });
+
+    it('should accept type with whitespace padding that exceeds max length but is valid after trim', async () => {
+      const padding = ' '.repeat(10);
+      const validString = 'a'.repeat(250);
+      const paddedString = padding + validString + padding; // Length 270 > 256
+
+      const payload = {
+        type: paddedString,
+        source: 'test-source',
+        payload: { foo: 'bar' },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+      expect(response.body).toEqual({ status: 'accepted' });
+    });
   });
 });

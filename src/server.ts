@@ -51,10 +51,8 @@ export function createServer(): Express {
       if (
         typeof type !== 'string' ||
         !type.trim() ||
-        type.length > MAX_STRING_LENGTH ||
         typeof source !== 'string' ||
         !source.trim() ||
-        source.length > MAX_STRING_LENGTH ||
         typeof payload === 'undefined'
       ) {
         return res.status(400).json({
@@ -65,6 +63,16 @@ export function createServer(): Express {
 
       const normalizedType = type.trim();
       const normalizedSource = source.trim();
+
+      if (
+        normalizedType.length > MAX_STRING_LENGTH ||
+        normalizedSource.length > MAX_STRING_LENGTH
+      ) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Event must include non-empty type & source (max ${MAX_STRING_LENGTH} chars) and payload`,
+        });
+      }
 
       let payloadPreview = payload;
       try {
