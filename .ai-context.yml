@@ -1,0 +1,74 @@
+---
+ai_context_version: 1.1
+
+project:
+  name: plexer
+  summary: "Event router for Heimgewebe, forwards events to Heimgeist."
+  role: event_router
+  primary_language: typescript
+  visibility: internal
+
+heimgewebe:
+  axis:
+    - Events
+    - Motorik
+  fleet:
+    enabled: true
+  wgx:
+    profile_expected: true
+    guard_smoke_expected: true
+
+interfaces:
+  consumes:
+    - "POST /events (type, source, payload)"
+  produces:
+    - "Forwarded events to Heimgeist"
+
+contracts:
+  schemas:
+    - path: "contracts/*.schema.json"
+      note: "Standard Heimgewebe event schema (implied)."
+
+dependencies:
+  internal:
+    - name: heimgeist
+      relationship: uses
+      interface: [events]
+  external:
+    - name: node
+      version: ">=18"
+
+architecture:
+  entrypoints:
+    - "src/index.ts"
+    - "src/server.ts"
+  key_paths:
+    - path: "src/__tests__/"
+      purpose: "Tests"
+  data_flow:
+    input: "POST /events"
+    processing: "Validation, Normalization"
+    output: "Async HTTP POST to Heimgeist"
+
+boundaries:
+  not_responsible_for:
+    - "PR command handling"
+    - "GitHub API interactions"
+  dangerous_assumptions:
+    - "Assuming Heimgeist is always available (we fire-and-forget)"
+
+conventions:
+  branching: "main, feature/*"
+  commit_prefix: "PLEXER"
+  ci_platform: github_actions
+
+documentation:
+  runbook: README.md
+
+ai_guidance:
+  do:
+    - "Ensure event payloads are logged with truncated preview."
+    - "Use fire-and-forget for forwarding to minimize latency."
+  dont:
+    - "Add complex logic to plexer; it should remain a simple router."
+    - "Block the response to the client while waiting for Heimgeist."
