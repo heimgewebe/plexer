@@ -5,9 +5,16 @@ export interface Config {
   heimgeistUrl?: string;
 }
 
-const parsedPort = parseInt(process.env.PORT || '3000', 10);
+const rawPort = process.env.PORT ?? '3000';
+const parsedPort = Number(rawPort);
 
-if (isNaN(parsedPort)) {
+const isValidPort =
+  Number.isInteger(parsedPort) &&
+  parsedPort > 0 &&
+  parsedPort <= 65535 &&
+  /^\d+$/.test(rawPort);
+
+if (!isValidPort) {
   throw new Error('Invalid PORT environment variable');
 }
 
