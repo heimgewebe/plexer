@@ -45,3 +45,10 @@ sowie im Zielbild
 
 Alle Rollen-Definitionen, Datenflüsse und Contract-Zuordnungen dieses Repos
 sind dort verankert.
+
+## Tooling
+
+- Node.js >= 20
+- pnpm (via Corepack)
+
+npm is not supported.

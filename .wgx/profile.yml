@@ -1,2 +1,18 @@
-class: service
-domain: routing
+wgx:
+  apiVersion: v1
+  requiredWgx: "^2.0.0"
+  repoKind: node-service
+
+  tooling:
+    shell:
+      default: bash
+    node:
+      packageManager: pnpm
+
+  tasks:
+    up: "pnpm install --frozen-lockfile"
+
+    smoke: |
+      set -euo pipefail
+      echo "[wgx.smoke] TypeScript-Build für plexer (pnpm)"
+      pnpm run build

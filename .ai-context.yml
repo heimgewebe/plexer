@@ -25,9 +25,7 @@ interfaces:
     - "Forwarded events to Heimgeist"
 
 contracts:
-  schemas:
-    - path: "contracts/*.schema.json"
-      note: "Standard Heimgewebe event schema (implied)."
+  schemas: [] # No local schemas; relies on external Heimgewebe event contracts.
 
 dependencies:
   internal:
