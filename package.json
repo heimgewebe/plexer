@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "description": "plexer application",
   "main": "dist/index.js",
+  "packageManager": "pnpm@9.15.0",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "pnpm exec tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "jest"

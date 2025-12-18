@@ -7,16 +7,12 @@ wgx:
     shell:
       default: bash
     node:
-      packageManager: npm
+      packageManager: pnpm
 
   tasks:
-    up: "npm install"
+    up: "pnpm install"
 
     smoke: |
       set -euo pipefail
-      echo "[wgx.smoke] TypeScript-Build für plexer"
-      if command -v npm >/dev/null 2>&1; then
-        npm run build
-      else
-        echo "[wgx.smoke] npm nicht verfügbar – übersprungen"
-      fi
+      echo "[wgx.smoke] TypeScript-Build für plexer (pnpm)"
+      pnpm run build
