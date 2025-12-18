@@ -133,7 +133,7 @@ export function createServer(): Express {
       });
     }
 
-    if (err.status === 413) {
+    if (err.status === 413 || (err as any).statusCode === 413) {
       return res.status(413).json({
         status: 'error',
         message: 'Payload Too Large',

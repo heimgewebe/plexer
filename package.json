@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "plexer application",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
