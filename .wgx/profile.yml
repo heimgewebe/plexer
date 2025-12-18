@@ -10,7 +10,7 @@ wgx:
       packageManager: pnpm
 
   tasks:
-    up: "pnpm install"
+    up: "pnpm install --frozen-lockfile"
 
     smoke: |
       set -euo pipefail
