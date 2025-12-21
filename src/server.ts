@@ -8,12 +8,20 @@ const pendingFetches = new Set<Promise<void>>();
 export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
   if (pendingFetches.size === 0) return;
 
-  const timeoutPromise = new Promise<void>((resolve) =>
-    setTimeout(resolve, timeoutMs),
+  const timeoutPromise = new Promise<string>((resolve) =>
+    setTimeout(() => resolve('timeout'), timeoutMs),
   );
-  const allFinished = Promise.all(pendingFetches).then(() => {});
+  const allFinished = Promise.all(Array.from(pendingFetches)).then(
+    () => 'done',
+  );
 
-  await Promise.race([allFinished, timeoutPromise]);
+  const result = await Promise.race([allFinished, timeoutPromise]);
+
+  if (result === 'timeout') {
+    console.log(
+      `Drain timeout after ${timeoutMs}ms (pending=${pendingFetches.size})`,
+    );
+  }
 }
 
 export function createServer(): Express {

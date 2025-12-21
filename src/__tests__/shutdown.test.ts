@@ -1,7 +1,6 @@
 
 import request from 'supertest';
 import { createServer, drainPendingRequests } from '../server';
-import { config } from '../config';
 
 // Mock config
 jest.mock('../config', () => ({
