@@ -3,6 +3,27 @@ import { config } from './config';
 
 const MAX_STRING_LENGTH = 256;
 
+const pendingFetches = new Set<Promise<void>>();
+
+export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
+  if (pendingFetches.size === 0) return;
+
+  const timeoutPromise = new Promise<string>((resolve) =>
+    setTimeout(() => resolve('timeout'), timeoutMs),
+  );
+  const allFinished = Promise.all(Array.from(pendingFetches)).then(
+    () => 'done',
+  );
+
+  const result = await Promise.race([allFinished, timeoutPromise]);
+
+  if (result === 'timeout') {
+    console.log(
+      `Drain timeout after ${timeoutMs}ms (pending=${pendingFetches.size})`,
+    );
+  }
+}
+
 export function createServer(): Express {
   const app = express();
 
@@ -91,7 +112,7 @@ export function createServer(): Express {
 
       // Forward to Heimgeist if configured (Fire and Forget)
       if (config.heimgeistUrl) {
-        fetch(config.heimgeistUrl, {
+        const fetchPromise = fetch(config.heimgeistUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -111,7 +132,11 @@ export function createServer(): Express {
           })
           .catch((error) => {
             console.error('Error forwarding event to Heimgeist:', error);
+          })
+          .finally(() => {
+            pendingFetches.delete(fetchPromise);
           });
+        pendingFetches.add(fetchPromise);
       }
 
       res.status(202).json({ status: 'accepted' });
