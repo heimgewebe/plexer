@@ -47,4 +47,14 @@ describe('config', () => {
       expect(config.port).toBe(3000);
     });
   });
+
+  it('uses default port when PORT is empty string', () => {
+    process.env.PORT = '';
+
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { config } = require('../config');
+      expect(config.port).toBe(3000);
+    });
+  });
 });

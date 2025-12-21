@@ -1,4 +1,4 @@
-import { createServer } from './server';
+import { createServer, drainPendingRequests } from './server';
 import { config } from './config';
 
 const app = createServer();
@@ -10,8 +10,10 @@ const server = app.listen(config.port, config.host, () => {
 
 const shutdown = () => {
   console.log('Shutting down server...');
-  server.close(() => {
-    console.log('Server closed');
+  server.close(async () => {
+    console.log('Server closed. Draining pending requests...');
+    await drainPendingRequests();
+    console.log('Pending requests drained. Exiting.');
     process.exit(0);
   });
 };
