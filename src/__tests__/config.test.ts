@@ -37,4 +37,14 @@ describe('config', () => {
       });
     }).toThrow('Invalid PORT environment variable');
   });
+
+  it('accepts ports with whitespace', () => {
+    process.env.PORT = ' 3000 ';
+
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { config } = require('../config');
+      expect(config.port).toBe(3000);
+    });
+  });
 });
