@@ -5,7 +5,7 @@ export interface Config {
   heimgeistUrl?: string;
 }
 
-const rawPort = process.env.PORT ?? '3000';
+const rawPort = (process.env.PORT ?? '3000').trim();
 const parsedPort = Number(rawPort);
 
 const isValidPort =

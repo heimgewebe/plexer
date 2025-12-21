@@ -1,12 +1,6 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import { config } from './config';
 
-interface IncomingEvent {
-  type: string;
-  source: string;
-  payload: unknown;
-}
-
 const MAX_STRING_LENGTH = 256;
 
 export function createServer(): Express {

@@ -34,7 +34,7 @@ dependencies:
       interface: [events]
   external:
     - name: node
-      version: ">=18"
+      version: ">=20"
 
 architecture:
   entrypoints:
