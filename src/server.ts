@@ -110,6 +110,21 @@ export function createServer(): Express {
         payload: payloadPreview,
       });
 
+      let serializedEvent: string;
+      try {
+        serializedEvent = JSON.stringify({
+          type: normalizedType,
+          source: normalizedSource,
+          payload,
+        });
+      } catch (error) {
+        console.error('Failed to serialize event payload for forwarding', error);
+        return res.status(400).json({
+          status: 'error',
+          message: 'Payload must be JSON-serializable',
+        });
+      }
+
       // Forward to Heimgeist if configured (Fire and Forget)
       if (config.heimgeistUrl) {
         const fetchPromise = fetch(config.heimgeistUrl, {
@@ -117,11 +132,7 @@ export function createServer(): Express {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            type: normalizedType,
-            source: normalizedSource,
-            payload,
-          }),
+          body: serializedEvent,
         })
           .then((response) => {
             if (!response.ok) {
@@ -142,6 +153,15 @@ export function createServer(): Express {
       res.status(202).json({ status: 'accepted' });
     },
   );
+
+  app.use((req: Request, res: Response) => {
+    res.status(404).json({
+      status: 'error',
+      message: 'Not Found',
+      path: req.path,
+      method: req.method,
+    });
+  });
 
   // Global error handler
   app.use((err: Error & { status?: number }, req: Request, res: Response, next: NextFunction) => {

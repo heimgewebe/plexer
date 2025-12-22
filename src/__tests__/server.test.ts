@@ -233,4 +233,19 @@ describe('Server', () => {
       expect(response.body).toEqual({ status: 'accepted' });
     });
   });
+
+  describe('Unknown routes', () => {
+    it('should respond with JSON 404 for unknown endpoints', async () => {
+      const response = await request(app).get('/does-not-exist');
+
+      expect(response.status).toBe(404);
+      expect(response.body).toEqual({
+        status: 'error',
+        message: 'Not Found',
+        path: '/does-not-exist',
+        method: 'GET',
+      });
+      expect(response.headers['content-type']).toMatch(/application\/json/);
+    });
+  });
 });
