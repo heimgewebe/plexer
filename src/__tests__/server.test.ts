@@ -239,9 +239,9 @@ describe('Server', () => {
         type: 'insights.daily.published',
         source: 'semantAH',
         payload: {
-          ts: '2023-10-27',
+          ts: '2025-01-01',
           url: 'https://github.com/heimgewebe/semantAH/releases/download/insights-daily/insights.daily.json',
-          generated_at: '2023-10-27T06:00:00Z',
+          generated_at: '2025-01-01T06:00:00Z',
         },
       };
 
