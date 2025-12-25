@@ -110,6 +110,16 @@ export function createServer(): Express {
         payload: payloadPreview,
       });
 
+      // Soft-guard for notification-only events
+      if (normalizedType === 'insights.daily.published') {
+        const payloadSize = JSON.stringify(payload).length;
+        if (payloadSize > 1024) {
+          console.warn(
+            `::warning:: insights.daily.published payload exceeds 1KB notification-only limit (size=${payloadSize})`,
+          );
+        }
+      }
+
       let serializedEvent: string;
       try {
         serializedEvent = JSON.stringify({
