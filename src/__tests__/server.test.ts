@@ -240,7 +240,7 @@ describe('Server', () => {
         source: 'semantAH',
         payload: {
           ts: '2023-10-27',
-          url: 'https://github.com/heimgewebe/semantAH/releases/latest/download/insights.daily.json',
+          url: 'https://github.com/heimgewebe/semantAH/releases/download/insights-daily/insights.daily.json',
           generated_at: '2023-10-27T06:00:00Z',
         },
       };
@@ -258,6 +258,11 @@ describe('Server', () => {
 
       // Verify that we are not trying to act as a file host (payload should be small)
       expect(JSON.stringify(payload.payload).length).toBeLessThan(1000);
+
+      // Verify URL pattern matches the stable release asset location (not 'latest')
+      expect(payload.payload.url).toMatch(
+        /^https:\/\/github\.com\/heimgewebe\/semantAH\/releases\/download\/insights-daily\//,
+      );
     });
   });
 
