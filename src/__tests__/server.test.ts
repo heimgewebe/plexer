@@ -263,6 +263,12 @@ describe('Server', () => {
       expect(payload.payload.url).toMatch(
         /^https:\/\/github\.com\/heimgewebe\/semantAH\/releases\/download\/insights-daily\//,
       );
+
+      // Verify timestamp formats match contract
+      expect(payload.payload.ts).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(payload.payload.generated_at).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/,
+      );
     });
   });
 
