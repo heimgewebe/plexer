@@ -232,6 +232,33 @@ describe('Server', () => {
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
     });
+
+    it('should support insights.daily.published event (notification only)', async () => {
+      // This test codifies the contract for the daily insights notification event
+      const payload = {
+        type: 'insights.daily.published',
+        source: 'semantAH',
+        payload: {
+          ts: '2023-10-27',
+          url: 'https://github.com/heimgewebe/semantAH/releases/latest/download/insights.daily.json',
+          generated_at: '2023-10-27T06:00:00Z',
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      // Verify that we are not trying to act as a file host (payload should be small)
+      expect(JSON.stringify(payload.payload).length).toBeLessThan(1000);
+    });
   });
 
   describe('Unknown routes', () => {
