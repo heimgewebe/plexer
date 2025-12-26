@@ -8,12 +8,14 @@ const pendingFetches = new Set<Promise<void>>();
 export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
   if (pendingFetches.size === 0) return;
 
-  const timeoutPromise = new Promise<string>((resolve) =>
-    setTimeout(() => resolve('timeout'), timeoutMs),
-  );
-  const allFinished = Promise.all(Array.from(pendingFetches)).then(
-    () => 'done',
-  );
+  let timeoutHandle: NodeJS.Timeout;
+  const timeoutPromise = new Promise<string>((resolve) => {
+    timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs);
+  });
+  const allFinished = Promise.all(Array.from(pendingFetches)).then(() => {
+    clearTimeout(timeoutHandle);
+    return 'done';
+  });
 
   const result = await Promise.race([allFinished, timeoutPromise]);
 
@@ -137,27 +139,31 @@ export function createServer(): Express {
 
       // Forward to Heimgeist if configured (Fire and Forget)
       if (config.heimgeistUrl) {
-        const fetchPromise = fetch(config.heimgeistUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: serializedEvent,
-        })
-          .then((response) => {
-            if (!response.ok) {
-              console.error(
-                `Failed to forward event to Heimgeist: ${response.status} ${response.statusText}`,
-              );
-            }
+        try {
+          const fetchPromise = fetch(config.heimgeistUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: serializedEvent,
           })
-          .catch((error) => {
-            console.error('Error forwarding event to Heimgeist:', error);
-          })
-          .finally(() => {
-            pendingFetches.delete(fetchPromise);
-          });
-        pendingFetches.add(fetchPromise);
+            .then((response) => {
+              if (!response.ok) {
+                console.error(
+                  `Failed to forward event to Heimgeist: ${response.status} ${response.statusText}`,
+                );
+              }
+            })
+            .catch((error) => {
+              console.error('Error forwarding event to Heimgeist:', error);
+            })
+            .finally(() => {
+              pendingFetches.delete(fetchPromise);
+            });
+          pendingFetches.add(fetchPromise);
+        } catch (error) {
+          console.error('Failed to initiate forward to Heimgeist:', error);
+        }
       }
 
       res.status(202).json({ status: 'accepted' });
