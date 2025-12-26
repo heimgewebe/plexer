@@ -12,10 +12,11 @@ export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
   const timeoutPromise = new Promise<string>((resolve) => {
     timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs);
   });
-  const allFinished = Promise.all(Array.from(pendingFetches)).then(() => {
-    clearTimeout(timeoutHandle);
-    return 'done';
-  });
+  const allFinished = Promise.all(Array.from(pendingFetches))
+    .then(() => 'done')
+    .finally(() => {
+      clearTimeout(timeoutHandle);
+    });
 
   const result = await Promise.race([allFinished, timeoutPromise]);
 
