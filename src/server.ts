@@ -140,21 +140,38 @@ export function createServer(): Express {
       }
 
       const eventId = randomUUID();
-      const consumers: Array<{ name: string; url?: string }> = [
-        { name: 'Heimgeist', url: config.heimgeistUrl },
-        { name: 'Leitstand', url: config.leitstandUrl },
-        { name: 'hausKI', url: config.hauskiUrl },
+      const consumers: Array<{
+        name: string;
+        url?: string;
+        token?: string;
+      }> = [
+        {
+          name: 'Heimgeist',
+          url: config.heimgeistUrl,
+          token: config.heimgeistToken,
+        },
+        {
+          name: 'Leitstand',
+          url: config.leitstandUrl,
+          token: config.leitstandToken,
+        },
+        { name: 'hausKI', url: config.hauskiUrl, token: config.hauskiToken },
       ];
 
-      consumers.forEach(({ name, url }) => {
+      consumers.forEach(({ name, url, token }) => {
         if (!url) return;
 
         try {
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+          };
+          if (token) {
+            headers.Authorization = `Bearer ${token}`;
+          }
+
           const fetchPromise = fetch(url, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers,
             body: serializedEvent,
           })
             .then((response) => {
@@ -163,6 +180,7 @@ export function createServer(): Express {
                 delivered_to: name,
                 status: response.ok ? 'success' : 'failure',
                 statusCode: response.status,
+                auth: !!token,
               });
               if (!response.ok) {
                 console.error(

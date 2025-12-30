@@ -11,6 +11,9 @@ jest.mock('../config', () => ({
     heimgeistUrl: 'http://heimgeist.local',
     leitstandUrl: 'http://leitstand.local',
     hauskiUrl: 'http://hauski.local',
+    // heimgeistToken is undefined
+    leitstandToken: 'leitstand-secret-token',
+    hauskiToken: 'hauski-secret-token',
   },
 }));
 
@@ -57,7 +60,7 @@ describe('Server', () => {
   });
 
   describe('POST /events', () => {
-    it('should accept valid event and forward to all configured consumers (fanout)', async () => {
+    it('should accept valid event and forward to all configured consumers (fanout) with auth headers if configured', async () => {
       const payload = {
         type: 'test.event',
         source: 'test-suite',
@@ -72,17 +75,35 @@ describe('Server', () => {
       expect(fetchMock).toHaveBeenCalledTimes(3);
 
       const expectedBody = JSON.stringify(payload);
-      const expectedOptions = {
+
+      // Heimgeist: No token configured
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: expectedBody,
-      };
+      });
 
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expectedOptions);
-      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', expectedOptions);
-      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', expectedOptions);
+      // Leitstand: Token configured
+      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer leitstand-secret-token',
+        },
+        body: expectedBody,
+      });
+
+      // hausKI: Token configured
+      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer hauski-secret-token',
+        },
+        body: expectedBody,
+      });
     });
 
     it('should truncate long payloads in logs (implicit check via code structure logic)', async () => {
@@ -127,17 +148,33 @@ describe('Server', () => {
         source: 'padded-source',
         payload: { foo: 'bar' },
       });
-      const expectedOptions = {
+
+      // Assert calls with their specific auth headers
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: expectedBody,
-      };
+      });
 
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expectedOptions);
-      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', expectedOptions);
-      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', expectedOptions);
+      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer leitstand-secret-token',
+        },
+        body: expectedBody,
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer hauski-secret-token',
+        },
+        body: expectedBody,
+      });
 
       expect(console.log).toHaveBeenCalledWith(
         'Received event',

@@ -5,6 +5,9 @@ export interface Config {
   heimgeistUrl?: string;
   leitstandUrl?: string;
   hauskiUrl?: string;
+  heimgeistToken?: string;
+  leitstandToken?: string;
+  hauskiToken?: string;
 }
 
 const envPort = process.env.PORT?.trim();
@@ -61,4 +64,8 @@ export const config: Config = {
   heimgeistUrl: process.env.HEIMGEIST_URL,
   leitstandUrl: process.env.LEITSTAND_URL,
   hauskiUrl: process.env.HAUSKI_URL,
+  heimgeistToken: process.env.HEIMGEIST_TOKEN,
+  leitstandToken:
+    process.env.LEITSTAND_TOKEN || process.env.LEITSTAND_EVENTS_TOKEN,
+  hauskiToken: process.env.HAUSKI_TOKEN || process.env.HAUSKI_EVENTS_TOKEN,
 };
