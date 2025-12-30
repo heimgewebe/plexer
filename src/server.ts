@@ -1,4 +1,5 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'crypto';
 import { config } from './config';
 
 const MAX_STRING_LENGTH = 256;
@@ -138,10 +139,18 @@ export function createServer(): Express {
         });
       }
 
-      // Forward to Heimgeist if configured (Fire and Forget)
-      if (config.heimgeistUrl) {
+      const eventId = randomUUID();
+      const consumers: Array<{ name: string; url?: string }> = [
+        { name: 'Heimgeist', url: config.heimgeistUrl },
+        { name: 'Leitstand', url: config.leitstandUrl },
+        { name: 'hausKI', url: config.hauskiUrl },
+      ];
+
+      consumers.forEach(({ name, url }) => {
+        if (!url) return;
+
         try {
-          const fetchPromise = fetch(config.heimgeistUrl, {
+          const fetchPromise = fetch(url, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -149,23 +158,34 @@ export function createServer(): Express {
             body: serializedEvent,
           })
             .then((response) => {
+              console.log('Event forwarded', {
+                event_id: eventId,
+                delivered_to: name,
+                status: response.ok ? 'success' : 'failure',
+                statusCode: response.status,
+              });
               if (!response.ok) {
                 console.error(
-                  `Failed to forward event to Heimgeist: ${response.status} ${response.statusText}`,
+                  `Failed to forward event to ${name}: ${response.status} ${response.statusText}`,
                 );
               }
             })
             .catch((error) => {
-              console.error('Error forwarding event to Heimgeist:', error);
+              console.log('Event forwarded', {
+                event_id: eventId,
+                delivered_to: name,
+                status: 'error',
+              });
+              console.error(`Error forwarding event to ${name}:`, error);
             })
             .finally(() => {
               pendingFetches.delete(fetchPromise);
             });
           pendingFetches.add(fetchPromise);
         } catch (error) {
-          console.error('Failed to initiate forward to Heimgeist:', error);
+          console.error(`Failed to initiate forward to ${name}:`, error);
         }
-      }
+      });
 
       res.status(202).json({ status: 'accepted' });
     },

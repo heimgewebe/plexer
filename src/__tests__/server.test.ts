@@ -9,6 +9,8 @@ jest.mock('../config', () => ({
     host: '0.0.0.0',
     environment: 'test',
     heimgeistUrl: 'http://heimgeist.local',
+    leitstandUrl: 'http://leitstand.local',
+    hauskiUrl: 'http://hauski.local',
   },
 }));
 
@@ -55,7 +57,7 @@ describe('Server', () => {
   });
 
   describe('POST /events', () => {
-    it('should accept valid event and forward to heimgeist', async () => {
+    it('should accept valid event and forward to all configured consumers (fanout)', async () => {
       const payload = {
         type: 'test.event',
         source: 'test-suite',
@@ -66,15 +68,21 @@ describe('Server', () => {
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
 
-      // Verify fetch was called correctly
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+      // Verify fetch was called 3 times (heimgeist, leitstand, hauski)
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+
+      const expectedBody = JSON.stringify(payload);
+      const expectedOptions = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
-      });
+        body: expectedBody,
+      };
+
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expectedOptions);
+      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', expectedOptions);
+      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', expectedOptions);
     });
 
     it('should truncate long payloads in logs (implicit check via code structure logic)', async () => {
@@ -89,7 +97,7 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(202);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
 
       // We check that console.log was called
       expect(console.log).toHaveBeenCalledWith(
@@ -114,17 +122,22 @@ describe('Server', () => {
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(202);
 
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+      const expectedBody = JSON.stringify({
+        type: 'padded.event',
+        source: 'padded-source',
+        payload: { foo: 'bar' },
+      });
+      const expectedOptions = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          type: 'padded.event',
-          source: 'padded-source',
-          payload: { foo: 'bar' },
-        }),
-      });
+        body: expectedBody,
+      };
+
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expectedOptions);
+      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', expectedOptions);
+      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', expectedOptions);
 
       expect(console.log).toHaveBeenCalledWith(
         'Received event',
@@ -135,10 +148,13 @@ describe('Server', () => {
       );
     });
 
-    it('should handle heimgeist failure gracefully (fire and forget)', async () => {
-       fetchMock.mockRejectedValueOnce(new Error('Network error'));
+    it('should handle one consumer failure gracefully (fire and forget)', async () => {
+      // First call (heimgeist) fails, others succeed
+      fetchMock
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
 
-       const payload = {
+      const payload = {
         type: 'test.event',
         source: 'test-suite',
         payload: { foo: 'bar' },
@@ -150,6 +166,7 @@ describe('Server', () => {
       // Wait a tick for the async promise to reject and be caught
       await new Promise(process.nextTick);
 
+      // One failure should be logged
       expect(console.error).toHaveBeenCalled();
     });
 
