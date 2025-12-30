@@ -194,9 +194,11 @@ export function createServer(): Express {
                 auth: !!token,
               });
               if (!response.ok) {
-                console.error(
-                  `Failed to forward event to ${name}: ${response.status} ${response.statusText}`,
-                );
+                let errorMessage = `Failed to forward event to ${name}: ${response.status} ${response.statusText}`;
+                if (response.status === 401 || response.status === 403) {
+                  errorMessage += ' (token rejected)';
+                }
+                console.error(errorMessage);
               }
             })
             .catch((error) => {

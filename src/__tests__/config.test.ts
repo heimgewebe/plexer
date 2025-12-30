@@ -57,4 +57,92 @@ describe('config', () => {
       expect(config.port).toBe(3000);
     });
   });
+
+  describe('Event Forwarding Config', () => {
+    it('accepts valid HEIMGEIST_URL', () => {
+      process.env.HEIMGEIST_URL = 'https://heimgeist.example.com';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.heimgeistUrl).toBe('https://heimgeist.example.com');
+      });
+    });
+
+    it('rejects invalid HEIMGEIST_URL', () => {
+      process.env.HEIMGEIST_URL = 'not-a-url';
+      expect(() => {
+        jest.isolateModules(() => {
+          require('../config');
+        });
+      }).toThrow('Invalid HEIMGEIST_URL');
+    });
+
+    it('accepts valid LEITSTAND_URL', () => {
+      process.env.LEITSTAND_URL = 'https://leitstand.example.com/events';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.leitstandUrl).toBe('https://leitstand.example.com/events');
+      });
+    });
+
+    it('rejects invalid LEITSTAND_URL', () => {
+      process.env.LEITSTAND_URL = 'not-a-url';
+      expect(() => {
+        jest.isolateModules(() => {
+          require('../config');
+        });
+      }).toThrow('Invalid LEITSTAND_URL');
+    });
+
+    it('accepts valid HAUSKI_URL', () => {
+      process.env.HAUSKI_URL = 'https://hauski.example.com';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.hauskiUrl).toBe('https://hauski.example.com');
+      });
+    });
+
+    it('rejects invalid HAUSKI_URL', () => {
+      process.env.HAUSKI_URL = 'not-a-url';
+      expect(() => {
+        jest.isolateModules(() => {
+          require('../config');
+        });
+      }).toThrow('Invalid HAUSKI_URL');
+    });
+
+    it('maps LEITSTAND_TOKEN correctly', () => {
+      process.env.LEITSTAND_TOKEN = 'secret-token';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.leitstandToken).toBe('secret-token');
+      });
+    });
+
+    it('maps LEITSTAND_EVENTS_TOKEN to leitstandToken as fallback', () => {
+      delete process.env.LEITSTAND_TOKEN;
+      process.env.LEITSTAND_EVENTS_TOKEN = 'events-token';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.leitstandToken).toBe('events-token');
+      });
+    });
+
+    it('prefers LEITSTAND_TOKEN over LEITSTAND_EVENTS_TOKEN', () => {
+      process.env.LEITSTAND_TOKEN = 'primary-token';
+      process.env.LEITSTAND_EVENTS_TOKEN = 'fallback-token';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.leitstandToken).toBe('primary-token');
+      });
+    });
+
+    it('maps HAUSKI_EVENTS_TOKEN to hauskiToken', () => {
+      delete process.env.HAUSKI_TOKEN;
+      process.env.HAUSKI_EVENTS_TOKEN = 'hauski-events-token';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.hauskiToken).toBe('hauski-events-token');
+      });
+    });
+  });
 });
