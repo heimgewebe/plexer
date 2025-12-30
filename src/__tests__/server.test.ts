@@ -60,7 +60,7 @@ describe('Server', () => {
   });
 
   describe('POST /events', () => {
-    it('should accept valid event and forward to all configured consumers (fanout) with auth headers if configured', async () => {
+    it('should forward unknown event types only to Heimgeist', async () => {
       const payload = {
         type: 'test.event',
         source: 'test-suite',
@@ -71,8 +71,8 @@ describe('Server', () => {
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
 
-      // Verify fetch was called 3 times (heimgeist, leitstand, hauski)
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Verify fetch was called 1 time (only heimgeist)
+      expect(fetchMock).toHaveBeenCalledTimes(1);
 
       const expectedBody = JSON.stringify(payload);
 
@@ -84,8 +84,36 @@ describe('Server', () => {
         },
         body: expectedBody,
       });
+    });
 
-      // Leitstand: Token configured
+    it('should forward knowledge.observatory.published.v1 event to all configured consumers (fanout)', async () => {
+      const payload = {
+        type: 'knowledge.observatory.published.v1',
+        source: 'test-suite',
+        payload: {
+          url: 'https://github.com/org/repo/releases/download/v1/obs.json',
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+      expect(response.body).toEqual({ status: 'accepted' });
+
+      // Verify fetch was called 3 times (heimgeist, leitstand, hauski)
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+
+      const expectedBody = JSON.stringify(payload);
+
+      // Heimgeist
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: expectedBody,
+      });
+
+      // Leitstand
       expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', {
         method: 'POST',
         headers: {
@@ -95,7 +123,7 @@ describe('Server', () => {
         body: expectedBody,
       });
 
-      // hausKI: Token configured
+      // hausKI
       expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
         method: 'POST',
         headers: {
@@ -118,7 +146,8 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(202);
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Only Heimgeist should receive 'test.event'
+      expect(fetchMock).toHaveBeenCalledTimes(1);
 
       // We check that console.log was called
       expect(console.log).toHaveBeenCalledWith(
@@ -149,29 +178,12 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       });
 
-      // Assert calls with their specific auth headers
+      // Since type is not 'knowledge.observatory.published.v1', only Heimgeist should be called
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-        },
-        body: expectedBody,
-      });
-
-      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer leitstand-secret-token',
-        },
-        body: expectedBody,
-      });
-
-      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer hauski-secret-token',
         },
         body: expectedBody,
       });

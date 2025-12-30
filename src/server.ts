@@ -161,6 +161,16 @@ export function createServer(): Express {
       consumers.forEach(({ name, url, token }) => {
         if (!url) return;
 
+        // Event Routing Logic
+        let shouldForward = false;
+        if (normalizedType === 'knowledge.observatory.published.v1') {
+          shouldForward = true;
+        } else {
+          shouldForward = name === 'Heimgeist';
+        }
+
+        if (!shouldForward) return;
+
         try {
           const headers: Record<string, string> = {
             'Content-Type': 'application/json',
