@@ -6,6 +6,13 @@ const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
 
+function shouldForward(eventType: string, consumerName: string): boolean {
+  if (eventType === 'knowledge.observatory.published.v1') {
+    return true;
+  }
+  return consumerName === 'Heimgeist';
+}
+
 export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
   if (pendingFetches.size === 0) return;
 
@@ -161,15 +168,9 @@ export function createServer(): Express {
       consumers.forEach(({ name, url, token }) => {
         if (!url) return;
 
-        // Event Routing Logic
-        let shouldForward = false;
-        if (normalizedType === 'knowledge.observatory.published.v1') {
-          shouldForward = true;
-        } else {
-          shouldForward = name === 'Heimgeist';
+        if (!shouldForward(normalizedType, name)) {
+          return;
         }
-
-        if (!shouldForward) return;
 
         try {
           const headers: Record<string, string> = {
