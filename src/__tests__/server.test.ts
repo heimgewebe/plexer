@@ -352,4 +352,30 @@ describe('Server', () => {
       expect(response.headers['content-type']).toMatch(/application\/json/);
     });
   });
+
+  describe('Error logging', () => {
+    it('should log "token rejected" when receiving 401 or 403', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        json: async () => ({}),
+      });
+
+      const payload = {
+        type: 'knowledge.observatory.published.v1',
+        source: 'test-suite',
+        payload: { foo: 'bar' },
+      };
+
+      await request(app).post('/events').send(payload);
+
+      // Wait for async processing
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('token rejected')
+      );
+    });
+  });
 });
