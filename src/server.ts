@@ -1,9 +1,17 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
+import { randomUUID } from 'crypto';
 import { config } from './config';
 
 const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
+
+function shouldForward(eventType: string, consumerName: string): boolean {
+  if (eventType === 'knowledge.observatory.published.v1') {
+    return true;
+  }
+  return consumerName === 'Heimgeist';
+}
 
 export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
   if (pendingFetches.size === 0) return;
@@ -138,34 +146,75 @@ export function createServer(): Express {
         });
       }
 
-      // Forward to Heimgeist if configured (Fire and Forget)
-      if (config.heimgeistUrl) {
+      const eventId = randomUUID();
+      const consumers: Array<{
+        name: string;
+        url?: string;
+        token?: string;
+      }> = [
+        {
+          name: 'Heimgeist',
+          url: config.heimgeistUrl,
+          token: config.heimgeistToken,
+        },
+        {
+          name: 'Leitstand',
+          url: config.leitstandUrl,
+          token: config.leitstandToken,
+        },
+        { name: 'hausKI', url: config.hauskiUrl, token: config.hauskiToken },
+      ];
+
+      consumers.forEach(({ name, url, token }) => {
+        if (!url) return;
+
+        if (!shouldForward(normalizedType, name)) {
+          return;
+        }
+
         try {
-          const fetchPromise = fetch(config.heimgeistUrl, {
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+          };
+          if (token) {
+            headers.Authorization = `Bearer ${token}`;
+          }
+
+          const fetchPromise = fetch(url, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers,
             body: serializedEvent,
           })
             .then((response) => {
+              console.log('Event forwarded', {
+                event_id: eventId,
+                delivered_to: name,
+                status: response.ok ? 'success' : 'failure',
+                statusCode: response.status,
+                auth: !!token,
+              });
               if (!response.ok) {
                 console.error(
-                  `Failed to forward event to Heimgeist: ${response.status} ${response.statusText}`,
+                  `Failed to forward event to ${name}: ${response.status} ${response.statusText}`,
                 );
               }
             })
             .catch((error) => {
-              console.error('Error forwarding event to Heimgeist:', error);
+              console.log('Event forwarded', {
+                event_id: eventId,
+                delivered_to: name,
+                status: 'error',
+              });
+              console.error(`Error forwarding event to ${name}:`, error);
             })
             .finally(() => {
               pendingFetches.delete(fetchPromise);
             });
           pendingFetches.add(fetchPromise);
         } catch (error) {
-          console.error('Failed to initiate forward to Heimgeist:', error);
+          console.error(`Failed to initiate forward to ${name}:`, error);
         }
-      }
+      });
 
       res.status(202).json({ status: 'accepted' });
     },

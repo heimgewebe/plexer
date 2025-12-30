@@ -9,6 +9,11 @@ jest.mock('../config', () => ({
     host: '0.0.0.0',
     environment: 'test',
     heimgeistUrl: 'http://heimgeist.local',
+    leitstandUrl: 'http://leitstand.local',
+    hauskiUrl: 'http://hauski.local',
+    // heimgeistToken is undefined
+    leitstandToken: 'leitstand-secret-token',
+    hauskiToken: 'hauski-secret-token',
   },
 }));
 
@@ -55,7 +60,7 @@ describe('Server', () => {
   });
 
   describe('POST /events', () => {
-    it('should accept valid event and forward to heimgeist', async () => {
+    it('should forward unknown event types only to Heimgeist', async () => {
       const payload = {
         type: 'test.event',
         source: 'test-suite',
@@ -66,14 +71,66 @@ describe('Server', () => {
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
 
-      // Verify fetch was called correctly
+      // Verify fetch was called 1 time (only heimgeist)
       expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      const expectedBody = JSON.stringify(payload);
+
+      // Heimgeist: No token configured
       expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: expectedBody,
+      });
+    });
+
+    it('should forward knowledge.observatory.published.v1 event to all configured consumers (fanout)', async () => {
+      const payload = {
+        type: 'knowledge.observatory.published.v1',
+        source: 'test-suite',
+        payload: {
+          url: 'https://github.com/org/repo/releases/download/v1/obs.json',
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+      expect(response.body).toEqual({ status: 'accepted' });
+
+      // Verify fetch was called 3 times (heimgeist, leitstand, hauski)
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+
+      const expectedBody = JSON.stringify(payload);
+
+      // Heimgeist
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: expectedBody,
+      });
+
+      // Leitstand
+      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer leitstand-secret-token',
+        },
+        body: expectedBody,
+      });
+
+      // hausKI
+      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer hauski-secret-token',
+        },
+        body: expectedBody,
       });
     });
 
@@ -89,6 +146,7 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(202);
+      // Only Heimgeist should receive 'test.event'
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       // We check that console.log was called
@@ -114,16 +172,20 @@ describe('Server', () => {
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(202);
 
+      const expectedBody = JSON.stringify({
+        type: 'padded.event',
+        source: 'padded-source',
+        payload: { foo: 'bar' },
+      });
+
+      // Since type is not 'knowledge.observatory.published.v1', only Heimgeist should be called
+      expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          type: 'padded.event',
-          source: 'padded-source',
-          payload: { foo: 'bar' },
-        }),
+        body: expectedBody,
       });
 
       expect(console.log).toHaveBeenCalledWith(
@@ -135,10 +197,13 @@ describe('Server', () => {
       );
     });
 
-    it('should handle heimgeist failure gracefully (fire and forget)', async () => {
-       fetchMock.mockRejectedValueOnce(new Error('Network error'));
+    it('should handle one consumer failure gracefully (fire and forget)', async () => {
+      // First call (heimgeist) fails, others succeed
+      fetchMock
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
 
-       const payload = {
+      const payload = {
         type: 'test.event',
         source: 'test-suite',
         payload: { foo: 'bar' },
@@ -150,6 +215,7 @@ describe('Server', () => {
       // Wait a tick for the async promise to reject and be caught
       await new Promise(process.nextTick);
 
+      // One failure should be logged
       expect(console.error).toHaveBeenCalled();
     });
 
