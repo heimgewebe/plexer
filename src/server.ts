@@ -7,7 +7,10 @@ const MAX_STRING_LENGTH = 256;
 const pendingFetches = new Set<Promise<void>>();
 
 function shouldForward(eventType: string, consumerName: string): boolean {
-  if (eventType === 'knowledge.observatory.published.v1') {
+  if (
+    eventType === 'knowledge.observatory.published.v1' ||
+    eventType === 'integrity.summary.published.v1'
+  ) {
     return true;
   }
   return consumerName === 'Heimgeist';

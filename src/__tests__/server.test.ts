@@ -134,6 +134,62 @@ describe('Server', () => {
       });
     });
 
+    it('should forward integrity.summary.published.v1 event to all configured consumers (fanout)', async () => {
+      const payload = {
+        type: 'integrity.summary.published.v1',
+        source: 'semantAH',
+        payload: {
+          repo: 'semantAH',
+          generated_at: '2023-10-27T10:00:00Z',
+          summary_url: 'https://.../reports/integrity/summary.json',
+          counts: {
+            claims: 12,
+            artifacts: 5,
+            loop_gaps: 3,
+            unclear: 2,
+          },
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+      expect(response.body).toEqual({ status: 'accepted' });
+
+      // Verify fetch was called 3 times (heimgeist, leitstand, hauski)
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+
+      const expectedBody = JSON.stringify(payload);
+
+      // Heimgeist
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: expectedBody,
+      });
+
+      // Leitstand
+      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer leitstand-secret-token',
+        },
+        body: expectedBody,
+      });
+
+      // hausKI
+      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer hauski-secret-token',
+        },
+        body: expectedBody,
+      });
+    });
+
     it('should truncate long payloads in logs (implicit check via code structure logic)', async () => {
       // It's hard to test the console.log output directly without complex spying setup,
       // but we can verify the request still succeeds with a long payload.
