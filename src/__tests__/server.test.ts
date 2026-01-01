@@ -456,10 +456,10 @@ describe('Server', () => {
       );
     });
 
-    it('should include repo in event forwarded logs', async () => {
+    it('should include publisher in event forwarded logs', async () => {
       const payload = {
         type: 'test.event',
-        source: 'test-repo',
+        source: 'test-source',
         payload: { foo: 'bar' },
       };
 
@@ -473,7 +473,36 @@ describe('Server', () => {
       expect(console.log).toHaveBeenCalledWith(
         'Event forwarded',
         expect.objectContaining({
-          repo: 'test-repo',
+          publisher: 'test-source',
+          status: 'success',
+        })
+      );
+    });
+
+    it('should include repo in event forwarded logs if present in payload', async () => {
+      const payload = {
+        type: 'integrity.summary.published.v1',
+        source: 'heimgewebe/semantAH',
+        payload: {
+          repo: 'semantAH',
+          url: 'http://example.com',
+          generated_at: '2023-10-27T10:00:00Z',
+          status: 'OK',
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      // Wait for async processing
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Check success log
+      expect(console.log).toHaveBeenCalledWith(
+        'Event forwarded',
+        expect.objectContaining({
+          publisher: 'heimgewebe/semantAH',
+          repo: 'semantAH',
           status: 'success',
         })
       );
