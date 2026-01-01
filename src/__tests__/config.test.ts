@@ -144,5 +144,39 @@ describe('config', () => {
         expect(config.hauskiToken).toBe('hauski-events-token');
       });
     });
+
+    it('accepts valid CHRONIK_URL', () => {
+      process.env.CHRONIK_URL = 'https://chronik.example.com';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.chronikUrl).toBe('https://chronik.example.com');
+      });
+    });
+
+    it('rejects invalid CHRONIK_URL', () => {
+      process.env.CHRONIK_URL = 'not-a-url';
+      expect(() => {
+        jest.isolateModules(() => {
+          require('../config');
+        });
+      }).toThrow('Invalid CHRONIK_URL');
+    });
+
+    it('maps CHRONIK_TOKEN correctly', () => {
+      process.env.CHRONIK_TOKEN = 'chronik-secret-token';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.chronikToken).toBe('chronik-secret-token');
+      });
+    });
+
+    it('maps CHRONIK_EVENTS_TOKEN to chronikToken as fallback', () => {
+      delete process.env.CHRONIK_TOKEN;
+      process.env.CHRONIK_EVENTS_TOKEN = 'chronik-events-token';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.chronikToken).toBe('chronik-events-token');
+      });
+    });
   });
 });

@@ -166,6 +166,7 @@ export function createServer(): Express {
           token: config.leitstandToken,
         },
         { name: 'hausKI', url: config.hauskiUrl, token: config.hauskiToken },
+        { name: 'Chronik', url: config.chronikUrl, token: config.chronikToken },
       ];
 
       consumers.forEach(({ name, url, token }) => {
