@@ -192,6 +192,7 @@ export function createServer(): Express {
             .then((response) => {
               console.log('Event forwarded', {
                 event_id: eventId,
+                repo: normalizedSource,
                 delivered_to: name,
                 status: response.ok ? 'success' : 'failure',
                 statusCode: response.status,
@@ -208,6 +209,7 @@ export function createServer(): Express {
             .catch((error) => {
               console.log('Event forwarded', {
                 event_id: eventId,
+                repo: normalizedSource,
                 delivered_to: name,
                 status: 'error',
               });

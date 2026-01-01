@@ -455,5 +455,28 @@ describe('Server', () => {
         expect.stringContaining('token rejected')
       );
     });
+
+    it('should include repo in event forwarded logs', async () => {
+      const payload = {
+        type: 'test.event',
+        source: 'test-repo',
+        payload: { foo: 'bar' },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      // Wait for async processing
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Check success log
+      expect(console.log).toHaveBeenCalledWith(
+        'Event forwarded',
+        expect.objectContaining({
+          repo: 'test-repo',
+          status: 'success',
+        })
+      );
+    });
   });
 });
