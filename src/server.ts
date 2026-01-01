@@ -190,13 +190,24 @@ export function createServer(): Express {
             body: serializedEvent,
           })
             .then((response) => {
-              console.log('Event forwarded', {
+              const logData: Record<string, unknown> = {
                 event_id: eventId,
+                publisher: normalizedSource,
                 delivered_to: name,
                 status: response.ok ? 'success' : 'failure',
                 statusCode: response.status,
                 auth: !!token,
-              });
+              };
+
+              if (
+                typeof payload === 'object' &&
+                payload !== null &&
+                'repo' in payload
+              ) {
+                logData.repo = (payload as Record<string, unknown>).repo;
+              }
+
+              console.log('Event forwarded', logData);
               if (!response.ok) {
                 let errorMessage = `Failed to forward event to ${name}: ${response.status} ${response.statusText}`;
                 if (response.status === 401 || response.status === 403) {
@@ -206,11 +217,22 @@ export function createServer(): Express {
               }
             })
             .catch((error) => {
-              console.log('Event forwarded', {
+              const logData: Record<string, unknown> = {
                 event_id: eventId,
+                publisher: normalizedSource,
                 delivered_to: name,
                 status: 'error',
-              });
+              };
+
+              if (
+                typeof payload === 'object' &&
+                payload !== null &&
+                'repo' in payload
+              ) {
+                logData.repo = (payload as Record<string, unknown>).repo;
+              }
+
+              console.log('Event forwarded', logData);
               console.error(`Error forwarding event to ${name}:`, error);
             })
             .finally(() => {
