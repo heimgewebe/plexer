@@ -8,6 +8,8 @@ export interface Config {
   heimgeistToken?: string;
   leitstandToken?: string;
   hauskiToken?: string;
+  chronikUrl?: string;
+  chronikToken?: string;
 }
 
 const envPort = process.env.PORT?.trim();
@@ -57,6 +59,17 @@ if (process.env.HAUSKI_URL) {
   }
 }
 
+if (process.env.CHRONIK_URL) {
+  try {
+    // eslint-disable-next-line no-new
+    new URL(process.env.CHRONIK_URL);
+  } catch (error) {
+    throw new Error(
+      `Invalid CHRONIK_URL environment variable: ${process.env.CHRONIK_URL}`,
+    );
+  }
+}
+
 export const config: Config = {
   port: parsedPort,
   host: process.env.HOST || '0.0.0.0',
@@ -64,8 +77,10 @@ export const config: Config = {
   heimgeistUrl: process.env.HEIMGEIST_URL,
   leitstandUrl: process.env.LEITSTAND_URL,
   hauskiUrl: process.env.HAUSKI_URL,
+  chronikUrl: process.env.CHRONIK_URL?.trim(),
   heimgeistToken: process.env.HEIMGEIST_TOKEN,
   leitstandToken:
     process.env.LEITSTAND_TOKEN || process.env.LEITSTAND_EVENTS_TOKEN,
   hauskiToken: process.env.HAUSKI_TOKEN || process.env.HAUSKI_EVENTS_TOKEN,
+  chronikToken: process.env.CHRONIK_TOKEN || process.env.CHRONIK_EVENTS_TOKEN,
 };

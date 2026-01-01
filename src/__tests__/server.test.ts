@@ -11,9 +11,11 @@ jest.mock('../config', () => ({
     heimgeistUrl: 'http://heimgeist.local',
     leitstandUrl: 'http://leitstand.local',
     hauskiUrl: 'http://hauski.local',
+    chronikUrl: 'http://chronik.local',
     // heimgeistToken is undefined
     leitstandToken: 'leitstand-secret-token',
     hauskiToken: 'hauski-secret-token',
+    chronikToken: 'chronik-secret-token',
   },
 }));
 
@@ -99,8 +101,8 @@ describe('Server', () => {
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
 
-      // Verify fetch was called 3 times (heimgeist, leitstand, hauski)
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Verify fetch was called 4 times (heimgeist, leitstand, hauski, chronik)
+      expect(fetchMock).toHaveBeenCalledTimes(4);
 
       const expectedBody = JSON.stringify(payload);
 
@@ -129,6 +131,16 @@ describe('Server', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer hauski-secret-token',
+        },
+        body: expectedBody,
+      });
+
+      // Chronik
+      expect(fetchMock).toHaveBeenCalledWith('http://chronik.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer chronik-secret-token',
         },
         body: expectedBody,
       });
@@ -155,8 +167,8 @@ describe('Server', () => {
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
 
-      // Verify fetch was called 3 times (heimgeist, leitstand, hauski)
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      // Verify fetch was called 4 times (heimgeist, leitstand, hauski, chronik)
+      expect(fetchMock).toHaveBeenCalledTimes(4);
 
       const expectedBody = JSON.stringify(payload);
 
@@ -185,6 +197,16 @@ describe('Server', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer hauski-secret-token',
+        },
+        body: expectedBody,
+      });
+
+      // Chronik
+      expect(fetchMock).toHaveBeenCalledWith('http://chronik.local', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer chronik-secret-token',
         },
         body: expectedBody,
       });
