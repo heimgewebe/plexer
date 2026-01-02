@@ -153,13 +153,8 @@ describe('Server', () => {
         payload: {
           repo: 'semantAH',
           generated_at: '2023-10-27T10:00:00Z',
-          summary_url: 'https://.../reports/integrity/summary.json',
-          counts: {
-            claims: 12,
-            artifacts: 5,
-            loop_gaps: 3,
-            unclear: 2,
-          },
+          url: 'https://.../reports/integrity/summary.json',
+          status: 'OK',
         },
       };
 
