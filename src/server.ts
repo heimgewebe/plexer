@@ -134,6 +134,8 @@ export function createServer(): Express {
         }
       }
 
+      // Strict Pass-through: Do not inject 'eventId' or timestamp into the forwarded body.
+      // The contract requires the payload to remain untouched.
       let serializedEvent: string;
       try {
         serializedEvent = JSON.stringify({

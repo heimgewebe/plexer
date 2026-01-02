@@ -153,13 +153,8 @@ describe('Server', () => {
         payload: {
           repo: 'semantAH',
           generated_at: '2023-10-27T10:00:00Z',
-          summary_url: 'https://.../reports/integrity/summary.json',
-          counts: {
-            claims: 12,
-            artifacts: 5,
-            loop_gaps: 3,
-            unclear: 2,
-          },
+          url: 'https://.../reports/integrity/summary.json',
+          status: 'OK',
         },
       };
 
@@ -210,6 +205,30 @@ describe('Server', () => {
         },
         body: expectedBody,
       });
+    });
+
+    it('should forward body strictly without injected keys (pass-through guardrail)', async () => {
+      const payload = {
+        type: 'test.guardrail.event',
+        source: 'test-source',
+        payload: { some: 'data' },
+      };
+
+      await request(app).post('/events').send(payload);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const callArgs = fetchMock.mock.calls[0];
+      const requestBody = JSON.parse(callArgs[1].body);
+
+      // Explicitly check that only the expected keys are present
+      expect(Object.keys(requestBody).sort()).toEqual(
+        ['payload', 'source', 'type'].sort(),
+      );
+
+      // Explicitly check absence of common injected keys
+      expect(requestBody).not.toHaveProperty('eventId');
+      expect(requestBody).not.toHaveProperty('timestamp');
+      expect(requestBody).not.toHaveProperty('ts');
     });
 
     it('should truncate long payloads in logs (implicit check via code structure logic)', async () => {
