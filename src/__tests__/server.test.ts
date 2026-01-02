@@ -207,6 +207,30 @@ describe('Server', () => {
       });
     });
 
+    it('should forward body strictly without injected keys (pass-through guardrail)', async () => {
+      const payload = {
+        type: 'test.guardrail.event',
+        source: 'test-source',
+        payload: { some: 'data' },
+      };
+
+      await request(app).post('/events').send(payload);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const callArgs = fetchMock.mock.calls[0];
+      const requestBody = JSON.parse(callArgs[1].body);
+
+      // Explicitly check that only the expected keys are present
+      expect(Object.keys(requestBody).sort()).toEqual(
+        ['payload', 'source', 'type'].sort(),
+      );
+
+      // Explicitly check absence of common injected keys
+      expect(requestBody).not.toHaveProperty('eventId');
+      expect(requestBody).not.toHaveProperty('timestamp');
+      expect(requestBody).not.toHaveProperty('ts');
+    });
+
     it('should truncate long payloads in logs (implicit check via code structure logic)', async () => {
       // It's hard to test the console.log output directly without complex spying setup,
       // but we can verify the request still succeeds with a long payload.
