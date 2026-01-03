@@ -153,6 +153,69 @@ describe('config', () => {
       });
     });
 
+    it('normalizes trailing slashes in CHRONIK_URL', () => {
+      process.env.CHRONIK_URL = 'https://chronik.example.com/api/';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.chronikUrl).toBe('https://chronik.example.com/api');
+      });
+    });
+
+    it('normalizes trailing slashes in HEIMGEIST_URL', () => {
+      process.env.HEIMGEIST_URL = 'https://heimgeist.example.com/api/';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.heimgeistUrl).toBe('https://heimgeist.example.com/api');
+      });
+    });
+
+    it('normalizes trailing slashes in LEITSTAND_URL', () => {
+      process.env.LEITSTAND_URL = 'https://leitstand.example.com/events/';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.leitstandUrl).toBe('https://leitstand.example.com/events');
+      });
+    });
+
+    it('normalizes trailing slashes in HAUSKI_URL', () => {
+      process.env.HAUSKI_URL = 'https://hauski.example.com/';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.hauskiUrl).toBe('https://hauski.example.com');
+      });
+    });
+
+    it('preserves query parameters when normalizing URLs', () => {
+      process.env.CHRONIK_URL = 'https://chronik.example.com/api/?foo=bar';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.chronikUrl).toBe('https://chronik.example.com/api?foo=bar');
+      });
+    });
+
+    it('preserves fragments when normalizing URLs', () => {
+      process.env.HEIMGEIST_URL = 'https://heimgeist.example.com/api/#section';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.heimgeistUrl).toBe('https://heimgeist.example.com/api#section');
+      });
+    });
+
+    it('preserves query parameters and fragments together', () => {
+      process.env.LEITSTAND_URL = 'https://leitstand.example.com/events/?key=value#anchor';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.leitstandUrl).toBe('https://leitstand.example.com/events?key=value#anchor');
+      });
+    });
+
     it('rejects invalid CHRONIK_URL', () => {
       process.env.CHRONIK_URL = 'not-a-url';
       expect(() => {
@@ -167,6 +230,15 @@ describe('config', () => {
       jest.isolateModules(() => {
         const { config } = require('../config');
         expect(config.chronikToken).toBe('chronik-secret-token');
+      });
+    });
+
+    it('drops empty tokens after trimming', () => {
+      process.env.HEIMGEIST_TOKEN = '    ';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.heimgeistToken).toBeUndefined();
       });
     });
 
