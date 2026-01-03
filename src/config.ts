@@ -40,15 +40,19 @@ const validateUrl = (name: string, value?: string): string | undefined => {
   try {
     const url = new URL(value);
 
-    const normalized =
-      url.pathname === '/' && !url.search && !url.hash
-        ? url.origin
-        : url.toString().replace(/\/+$/, '');
+    // Normalize pathname only: remove trailing slashes, but keep "/" for root.
+    let pathname = url.pathname;
+    if (pathname !== '/') {
+      pathname = pathname.replace(/\/+$/, '');
+    }
 
-    // eslint-disable-next-line no-new
-    new URL(normalized);
+    // Special case: if pathname is just "/" and no search/hash, return origin only
+    if (pathname === '/' && !url.search && !url.hash) {
+      return url.origin;
+    }
 
-    return normalized;
+    // Recompose (preserve search + hash)
+    return `${url.origin}${pathname}${url.search}${url.hash}`;
   } catch (error) {
     throw new Error(`Invalid ${name} environment variable: ${value}`);
   }
