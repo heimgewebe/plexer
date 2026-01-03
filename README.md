@@ -57,4 +57,4 @@ npm is not supported.
 
 - Alle URL-Variablen (`HEIMGEIST_URL`, `LEITSTAND_URL`, `HAUSKI_URL`, `CHRONIK_URL`) müssen vollqualifiziert sein, d. h. inklusive Schema (`https://…`).
 - Abschließende Slashes werden zur Konsistenz entfernt (z. B. `https://chronik.example.com/api/` → `https://chronik.example.com/api`).
-- Leerzeichen in Variablen werden getrimmt; leere Werte werden wie nicht gesetzte Variablen behandelt und auf Defaults zurückgesetzt.
+- Leerzeichen in Variablen werden getrimmt; leere Werte werden wie nicht gesetzte Variablen behandelt.
