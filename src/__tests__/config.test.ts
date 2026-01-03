@@ -153,6 +153,15 @@ describe('config', () => {
       });
     });
 
+    it('normalizes trailing slashes in CHRONIK_URL', () => {
+      process.env.CHRONIK_URL = 'https://chronik.example.com/api/';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.chronikUrl).toBe('https://chronik.example.com/api');
+      });
+    });
+
     it('rejects invalid CHRONIK_URL', () => {
       process.env.CHRONIK_URL = 'not-a-url';
       expect(() => {
@@ -167,6 +176,15 @@ describe('config', () => {
       jest.isolateModules(() => {
         const { config } = require('../config');
         expect(config.chronikToken).toBe('chronik-secret-token');
+      });
+    });
+
+    it('drops empty tokens after trimming', () => {
+      process.env.HEIMGEIST_TOKEN = '    ';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.heimgeistToken).toBeUndefined();
       });
     });
 

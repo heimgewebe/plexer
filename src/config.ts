@@ -12,7 +12,15 @@ export interface Config {
   chronikToken?: string;
 }
 
-const envPort = process.env.PORT?.trim();
+const getEnv = (name: string): string | undefined => {
+  const value = process.env[name];
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const envPort = getEnv('PORT');
 const rawPort = envPort || '3000';
 const parsedPort = Number(rawPort);
 
@@ -26,61 +34,42 @@ if (!isValidPort) {
   throw new Error('Invalid PORT environment variable');
 }
 
-if (process.env.HEIMGEIST_URL) {
-  try {
-    // eslint-disable-next-line no-new
-    new URL(process.env.HEIMGEIST_URL);
-  } catch (error) {
-    throw new Error(
-      `Invalid HEIMGEIST_URL environment variable: ${process.env.HEIMGEIST_URL}`,
-    );
-  }
-}
+const validateUrl = (name: string, value?: string): string | undefined => {
+  if (!value) return undefined;
 
-if (process.env.LEITSTAND_URL) {
   try {
-    // eslint-disable-next-line no-new
-    new URL(process.env.LEITSTAND_URL);
-  } catch (error) {
-    throw new Error(
-      `Invalid LEITSTAND_URL environment variable: ${process.env.LEITSTAND_URL}`,
-    );
-  }
-}
+    const url = new URL(value);
 
-if (process.env.HAUSKI_URL) {
-  try {
-    // eslint-disable-next-line no-new
-    new URL(process.env.HAUSKI_URL);
-  } catch (error) {
-    throw new Error(
-      `Invalid HAUSKI_URL environment variable: ${process.env.HAUSKI_URL}`,
-    );
-  }
-}
+    const normalized =
+      url.pathname === '/' && !url.search && !url.hash
+        ? url.origin
+        : url.toString().replace(/\/+$/, '');
 
-if (process.env.CHRONIK_URL) {
-  try {
     // eslint-disable-next-line no-new
-    new URL(process.env.CHRONIK_URL);
+    new URL(normalized);
+
+    return normalized;
   } catch (error) {
-    throw new Error(
-      `Invalid CHRONIK_URL environment variable: ${process.env.CHRONIK_URL}`,
-    );
+    throw new Error(`Invalid ${name} environment variable: ${value}`);
   }
-}
+};
+
+const heimgeistUrl = validateUrl('HEIMGEIST_URL', getEnv('HEIMGEIST_URL'));
+const leitstandUrl = validateUrl('LEITSTAND_URL', getEnv('LEITSTAND_URL'));
+const hauskiUrl = validateUrl('HAUSKI_URL', getEnv('HAUSKI_URL'));
+const chronikUrl = validateUrl('CHRONIK_URL', getEnv('CHRONIK_URL'));
 
 export const config: Config = {
   port: parsedPort,
-  host: process.env.HOST || '0.0.0.0',
-  environment: process.env.NODE_ENV || 'development',
-  heimgeistUrl: process.env.HEIMGEIST_URL,
-  leitstandUrl: process.env.LEITSTAND_URL,
-  hauskiUrl: process.env.HAUSKI_URL,
-  chronikUrl: process.env.CHRONIK_URL?.trim(),
-  heimgeistToken: process.env.HEIMGEIST_TOKEN,
+  host: getEnv('HOST') || '0.0.0.0',
+  environment: getEnv('NODE_ENV') || 'development',
+  heimgeistUrl,
+  leitstandUrl,
+  hauskiUrl,
+  chronikUrl,
+  heimgeistToken: getEnv('HEIMGEIST_TOKEN'),
   leitstandToken:
-    process.env.LEITSTAND_TOKEN || process.env.LEITSTAND_EVENTS_TOKEN,
-  hauskiToken: process.env.HAUSKI_TOKEN || process.env.HAUSKI_EVENTS_TOKEN,
-  chronikToken: process.env.CHRONIK_TOKEN || process.env.CHRONIK_EVENTS_TOKEN,
+    getEnv('LEITSTAND_TOKEN') || getEnv('LEITSTAND_EVENTS_TOKEN'),
+  hauskiToken: getEnv('HAUSKI_TOKEN') || getEnv('HAUSKI_EVENTS_TOKEN'),
+  chronikToken: getEnv('CHRONIK_TOKEN') || getEnv('CHRONIK_EVENTS_TOKEN'),
 };
