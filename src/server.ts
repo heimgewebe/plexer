@@ -6,14 +6,14 @@ const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
 
-function shouldForward(eventType: string, consumerName: string): boolean {
+function shouldForward(eventType: string, consumerKey: string): boolean {
   if (
     eventType === 'knowledge.observatory.published.v1' ||
     eventType === 'integrity.summary.published.v1'
   ) {
     return true;
   }
-  return consumerName === 'Heimgeist';
+  return consumerKey === 'heimgeist';
 }
 
 export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
@@ -153,28 +153,41 @@ export function createServer(): Express {
 
       const eventId = randomUUID();
       const consumers: Array<{
-        name: string;
+        key: string;
+        label: string;
         url?: string;
         token?: string;
       }> = [
         {
-          name: 'Heimgeist',
+          key: 'heimgeist',
+          label: 'Heimgeist',
           url: config.heimgeistUrl,
           token: config.heimgeistToken,
         },
         {
-          name: 'Leitstand',
+          key: 'leitstand',
+          label: 'Leitstand',
           url: config.leitstandUrl,
           token: config.leitstandToken,
         },
-        { name: 'hausKI', url: config.hauskiUrl, token: config.hauskiToken },
-        { name: 'Chronik', url: config.chronikUrl, token: config.chronikToken },
+        {
+          key: 'hauski',
+          label: 'hausKI',
+          url: config.hauskiUrl,
+          token: config.hauskiToken,
+        },
+        {
+          key: 'chronik',
+          label: 'Chronik',
+          url: config.chronikUrl,
+          token: config.chronikToken,
+        },
       ];
 
-      consumers.forEach(({ name, url, token }) => {
+      consumers.forEach(({ key, label, url, token }) => {
         if (!url) return;
 
-        if (!shouldForward(normalizedType, name)) {
+        if (!shouldForward(normalizedType, key)) {
           return;
         }
 
@@ -195,7 +208,7 @@ export function createServer(): Express {
               const logData: Record<string, unknown> = {
                 event_id: eventId,
                 publisher: normalizedSource,
-                delivered_to: name,
+                delivered_to: label,
                 status: response.ok ? 'success' : 'failure',
                 statusCode: response.status,
                 auth: !!token,
@@ -211,7 +224,7 @@ export function createServer(): Express {
 
               console.log('Event forwarded', logData);
               if (!response.ok) {
-                let errorMessage = `Failed to forward event to ${name}: ${response.status} ${response.statusText}`;
+                let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
                 if (response.status === 401 || response.status === 403) {
                   errorMessage += ' (token rejected)';
                 }
@@ -222,7 +235,7 @@ export function createServer(): Express {
               const logData: Record<string, unknown> = {
                 event_id: eventId,
                 publisher: normalizedSource,
-                delivered_to: name,
+                delivered_to: label,
                 status: 'error',
               };
 
@@ -235,14 +248,14 @@ export function createServer(): Express {
               }
 
               console.log('Event forwarded', logData);
-              console.error(`Error forwarding event to ${name}:`, error);
+              console.error(`Error forwarding event to ${label}:`, error);
             })
             .finally(() => {
               pendingFetches.delete(fetchPromise);
             });
           pendingFetches.add(fetchPromise);
         } catch (error) {
-          console.error(`Failed to initiate forward to ${name}:`, error);
+          console.error(`Failed to initiate forward to ${label}:`, error);
         }
       });
 

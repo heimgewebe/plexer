@@ -86,6 +86,10 @@ describe('Server', () => {
         },
         body: expectedBody,
       });
+
+      // Other consumers should not receive unknown event types
+      const urls = fetchMock.mock.calls.map(([url]) => url);
+      expect(urls).toEqual(['http://heimgeist.local']);
     });
 
     it('should forward knowledge.observatory.published.v1 event to all configured consumers (fanout)', async () => {
@@ -125,7 +129,7 @@ describe('Server', () => {
         body: expectedBody,
       });
 
-      // hausKI
+      // hauski
       expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
         method: 'POST',
         headers: {
@@ -186,7 +190,7 @@ describe('Server', () => {
         body: expectedBody,
       });
 
-      // hausKI
+      // hauski
       expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
         method: 'POST',
         headers: {
