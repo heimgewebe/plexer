@@ -6,6 +6,24 @@ const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
 
+function tryJson(value: unknown): { json: string | null } {
+  try {
+    const json = JSON.stringify(value);
+    return { json };
+  } catch {
+    return { json: null };
+  }
+}
+
+function getPayloadSizeBytes(payload: unknown): number | null {
+  const payloadJson = tryJson(payload).json;
+  if (payloadJson === null) {
+    return null;
+  }
+
+  return Buffer.byteLength(payloadJson, 'utf8');
+}
+
 function shouldForward(eventType: string, consumerKey: string): boolean {
   if (
     eventType === 'knowledge.observatory.published.v1' ||
@@ -103,19 +121,15 @@ export function createServer(): Express {
         });
       }
 
-      let payloadPreview = payload;
-      try {
-        if (typeof payload === 'object' && payload !== null) {
-          payloadPreview = JSON.stringify(payload);
-        } else {
-          payloadPreview = String(payload);
-        }
+      let payloadPreview = String(payload);
 
-        if (typeof payloadPreview === 'string' && payloadPreview.length > 100) {
-          payloadPreview = `${payloadPreview.slice(0, 100)}…`;
-        }
-      } catch (e) {
-        payloadPreview = '[Circular or invalid payload]';
+      if (typeof payload === 'object' && payload !== null) {
+        const payloadJson = tryJson(payload).json;
+        payloadPreview = payloadJson ?? '[Circular or invalid payload]';
+      }
+
+      if (payloadPreview.length > 100) {
+        payloadPreview = `${payloadPreview.slice(0, 100)}…`;
       }
 
       console.log('Received event', {
@@ -126,10 +140,14 @@ export function createServer(): Express {
 
       // Soft-guard for notification-only events
       if (normalizedType === 'insights.daily.published') {
-        const payloadSize = JSON.stringify(payload).length;
-        if (payloadSize > 1024) {
+        const payloadBytes = getPayloadSizeBytes(payload);
+        if (payloadBytes === null) {
           console.warn(
-            `::warning:: insights.daily.published payload exceeds 1KB notification-only limit (size=${payloadSize})`,
+            '::warning:: insights.daily.published payload size could not be computed (non-serializable payload)',
+          );
+        } else if (payloadBytes > 1024) {
+          console.warn(
+            `::warning:: insights.daily.published payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
           );
         }
       }
