@@ -16,22 +16,6 @@ function tryJson(value: unknown): { json: string | null } {
 }
 
 function getPayloadSizeBytes(payload: unknown): number | null {
-  if (payload === null || typeof payload === 'undefined') {
-    return 0;
-  }
-
-  if (typeof payload === 'string') {
-    return Buffer.byteLength(payload, 'utf8');
-  }
-
-  if (typeof payload === 'number' || typeof payload === 'boolean') {
-    return Buffer.byteLength(String(payload), 'utf8');
-  }
-
-  if (typeof payload === 'bigint') {
-    return Buffer.byteLength(payload.toString(), 'utf8');
-  }
-
   const payloadJson = tryJson(payload).json;
   if (payloadJson === null) {
     return null;
