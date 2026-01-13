@@ -57,7 +57,7 @@ function getPayloadSizeBytes(payload: unknown): number | null {
 }
 
 function shouldForward(eventType: string, consumerKey: string): boolean {
-  if (BROADCAST_EVENTS.includes(eventType)) {
+  if (BROADCAST_EVENTS.has(eventType)) {
     return true;
   }
   return consumerKey === 'heimgeist';
