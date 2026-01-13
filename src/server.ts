@@ -1,10 +1,42 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import { config } from './config';
+import { PlexerEvent } from './types';
+import {
+  BROADCAST_EVENTS,
+  EVENT_INSIGHTS_DAILY_PUBLISHED,
+} from './constants';
 
 const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
+
+const CONSUMERS = [
+  {
+    key: 'heimgeist',
+    label: 'Heimgeist',
+    url: config.heimgeistUrl,
+    token: config.heimgeistToken,
+  },
+  {
+    key: 'leitstand',
+    label: 'Leitstand',
+    url: config.leitstandUrl,
+    token: config.leitstandToken,
+  },
+  {
+    key: 'hauski',
+    label: 'hausKI',
+    url: config.hauskiUrl,
+    token: config.hauskiToken,
+  },
+  {
+    key: 'chronik',
+    label: 'Chronik',
+    url: config.chronikUrl,
+    token: config.chronikToken,
+  },
+];
 
 function tryJson(value: unknown): { json: string | null } {
   try {
@@ -25,10 +57,7 @@ function getPayloadSizeBytes(payload: unknown): number | null {
 }
 
 function shouldForward(eventType: string, consumerKey: string): boolean {
-  if (
-    eventType === 'knowledge.observatory.published.v1' ||
-    eventType === 'integrity.summary.published.v1'
-  ) {
+  if (BROADCAST_EVENTS.has(eventType)) {
     return true;
   }
   return consumerKey === 'heimgeist';
@@ -93,7 +122,7 @@ export function createServer(): Express {
         });
       }
 
-      const { type, source, payload } = body as Record<string, unknown>;
+      const { type, source, payload } = body as unknown as PlexerEvent;
 
       if (
         typeof type !== 'string' ||
@@ -139,15 +168,15 @@ export function createServer(): Express {
       });
 
       // Soft-guard for notification-only events
-      if (normalizedType === 'insights.daily.published') {
+      if (normalizedType === EVENT_INSIGHTS_DAILY_PUBLISHED) {
         const payloadBytes = getPayloadSizeBytes(payload);
         if (payloadBytes === null) {
           console.warn(
-            '::warning:: insights.daily.published payload size could not be computed (non-serializable payload)',
+            `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
           );
         } else if (payloadBytes > 1024) {
           console.warn(
-            `::warning:: insights.daily.published payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
+            `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
           );
         }
       }
@@ -170,39 +199,8 @@ export function createServer(): Express {
       }
 
       const eventId = randomUUID();
-      const consumers: Array<{
-        key: string;
-        label: string;
-        url?: string;
-        token?: string;
-      }> = [
-        {
-          key: 'heimgeist',
-          label: 'Heimgeist',
-          url: config.heimgeistUrl,
-          token: config.heimgeistToken,
-        },
-        {
-          key: 'leitstand',
-          label: 'Leitstand',
-          url: config.leitstandUrl,
-          token: config.leitstandToken,
-        },
-        {
-          key: 'hauski',
-          label: 'hausKI',
-          url: config.hauskiUrl,
-          token: config.hauskiToken,
-        },
-        {
-          key: 'chronik',
-          label: 'Chronik',
-          url: config.chronikUrl,
-          token: config.chronikToken,
-        },
-      ];
 
-      consumers.forEach(({ key, label, url, token }) => {
+      CONSUMERS.forEach(({ key, label, url, token }) => {
         if (!url) return;
 
         if (!shouldForward(normalizedType, key)) {
