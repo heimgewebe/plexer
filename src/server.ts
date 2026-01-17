@@ -5,6 +5,7 @@ import { PlexerEvent } from './types';
 import {
   BROADCAST_EVENTS,
   EVENT_INSIGHTS_DAILY_PUBLISHED,
+  BEST_EFFORT_EVENTS,
 } from './constants';
 
 const MAX_STRING_LENGTH = 256;
@@ -238,33 +239,40 @@ export function createServer(): Express {
                 logData.repo = (payload as Record<string, unknown>).repo;
               }
 
-              console.log('Event forwarded', logData);
-              if (!response.ok) {
+              if (response.ok) {
+                console.log('Event forwarded', logData);
+              } else {
                 let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
                 if (response.status === 401 || response.status === 403) {
                   errorMessage += ' (token rejected)';
                 }
-                console.error(errorMessage);
+
+                const context = {
+                  status: response.status,
+                  label,
+                  type: normalizedType,
+                };
+
+                if (BEST_EFFORT_EVENTS.has(normalizedType)) {
+                  console.warn(`[Best-Effort] ${errorMessage}`, context);
+                } else {
+                  console.error(errorMessage, context);
+                }
               }
             })
             .catch((error) => {
-              const logData: Record<string, unknown> = {
-                event_id: eventId,
-                publisher: normalizedSource,
-                delivered_to: label,
-                status: 'error',
+              const errorMessage = `Error forwarding event to ${label}:`;
+              const context = {
+                label,
+                type: normalizedType,
+                error: error instanceof Error ? error.message : String(error),
               };
 
-              if (
-                typeof payload === 'object' &&
-                payload !== null &&
-                'repo' in payload
-              ) {
-                logData.repo = (payload as Record<string, unknown>).repo;
+              if (BEST_EFFORT_EVENTS.has(normalizedType)) {
+                console.warn(`[Best-Effort] ${errorMessage}`, context);
+              } else {
+                console.error(errorMessage, context);
               }
-
-              console.log('Event forwarded', logData);
-              console.error(`Error forwarding event to ${label}:`, error);
             })
             .finally(() => {
               pendingFetches.delete(fetchPromise);
