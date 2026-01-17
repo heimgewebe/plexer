@@ -149,6 +149,11 @@ describe('Server', () => {
         },
         body: expectedBody,
       });
+
+      // Verify no errors or warnings for successful forward
+      await new Promise(process.nextTick);
+      expect(console.warn).not.toHaveBeenCalled();
+      expect(console.error).not.toHaveBeenCalled();
     });
 
     it('should forward integrity.summary.published.v1 event to all configured consumers (fanout)', async () => {
@@ -469,6 +474,8 @@ describe('Server', () => {
         expect.anything() // Expecting context/error as second arg
       );
       expect(console.error).not.toHaveBeenCalled();
+      // Verify "Event forwarded" success log is NOT called
+      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
     });
 
     it('should explicitly treat integrity.summary.published.v1 as best-effort on non-2xx response (warn instead of error)', async () => {
@@ -504,6 +511,8 @@ describe('Server', () => {
         })
       );
       expect(console.error).not.toHaveBeenCalled();
+      // Verify "Event forwarded" success log is NOT called
+      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
     });
 
     it('should treat normal events as critical (log error on failure)', async () => {
@@ -534,6 +543,8 @@ describe('Server', () => {
         expect.stringContaining('[Best-Effort]'),
         expect.anything()
       );
+      // Verify "Event forwarded" success log is NOT called
+      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
     });
   });
 

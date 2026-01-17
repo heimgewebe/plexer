@@ -239,8 +239,9 @@ export function createServer(): Express {
                 logData.repo = (payload as Record<string, unknown>).repo;
               }
 
-              console.log('Event forwarded', logData);
-              if (!response.ok) {
+              if (response.ok) {
+                console.log('Event forwarded', logData);
+              } else {
                 let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
                 if (response.status === 401 || response.status === 403) {
                   errorMessage += ' (token rejected)';
@@ -260,23 +261,6 @@ export function createServer(): Express {
               }
             })
             .catch((error) => {
-              const logData: Record<string, unknown> = {
-                event_id: eventId,
-                publisher: normalizedSource,
-                delivered_to: label,
-                status: 'error',
-              };
-
-              if (
-                typeof payload === 'object' &&
-                payload !== null &&
-                'repo' in payload
-              ) {
-                logData.repo = (payload as Record<string, unknown>).repo;
-              }
-
-              console.log('Event forwarded', logData);
-
               const errorMessage = `Error forwarding event to ${label}:`;
               const context = {
                 label,
