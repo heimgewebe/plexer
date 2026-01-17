@@ -12,3 +12,9 @@ export const BROADCAST_EVENTS = new Set([
   EVENT_KNOWLEDGE_OBSERVATORY_PUBLISHED_V1,
   EVENT_INTEGRITY_SUMMARY_PUBLISHED_V1,
 ]);
+
+// Events that must NOT block routing or trigger retries/alerts.
+// Integrity is pull-based; events are optional hints.
+export const BEST_EFFORT_EVENTS = new Set([
+  EVENT_INTEGRITY_SUMMARY_PUBLISHED_V1,
+]);

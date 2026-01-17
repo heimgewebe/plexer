@@ -437,6 +437,39 @@ describe('Server', () => {
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/,
       );
     });
+
+    it('should explicitly treat integrity.summary.published.v1 as best-effort (no throw on failure)', async () => {
+      // This test ensures that the "best-effort" contract for integrity events is technically upheld.
+      // Even if all forwarding is currently best-effort, this test locks in the behavior specifically for integrity.
+
+      // Force all consumers to fail
+      fetchMock.mockRejectedValue(new Error('Network Down'));
+
+      const payload = {
+        type: 'integrity.summary.published.v1',
+        source: 'semantAH',
+        payload: {
+          repo: 'semantAH',
+          url: 'https://example.com/summary.json',
+          generated_at: '2025-01-01T12:00:00Z',
+          status: 'OK'
+        },
+      };
+
+      // Expectation: 202 Accepted, NOT 500
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+      expect(response.body).toEqual({ status: 'accepted' });
+
+      // Verify fetch was attempted (fanout to 4 consumers)
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+
+      // Wait a tick for the async promise rejection handling (logging)
+      await new Promise(process.nextTick);
+
+      // Verify errors were logged but swallowed
+      expect(console.error).toHaveBeenCalled();
+    });
   });
 
   describe('Unknown routes', () => {
