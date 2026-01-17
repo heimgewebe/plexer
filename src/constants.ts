@@ -1,5 +1,7 @@
 export const EVENT_KNOWLEDGE_OBSERVATORY_PUBLISHED_V1 =
   'knowledge.observatory.published.v1';
+
+// Best-effort forwarding; primary integrity loop is pull-based (Chronik -> Release Assets)
 export const EVENT_INTEGRITY_SUMMARY_PUBLISHED_V1 =
   'integrity.summary.published.v1';
 
