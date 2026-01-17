@@ -246,10 +246,16 @@ export function createServer(): Express {
                   errorMessage += ' (token rejected)';
                 }
 
+                const context = {
+                  status: response.status,
+                  label,
+                  type: normalizedType,
+                };
+
                 if (BEST_EFFORT_EVENTS.has(normalizedType)) {
-                  console.warn(`[Best-Effort] ${errorMessage}`);
+                  console.warn(`[Best-Effort] ${errorMessage}`, context);
                 } else {
-                  console.error(errorMessage);
+                  console.error(errorMessage, context);
                 }
               }
             })

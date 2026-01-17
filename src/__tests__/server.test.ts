@@ -466,7 +466,7 @@ describe('Server', () => {
       // Verify it was logged as a warning, NOT an error
       expect(console.warn).toHaveBeenCalledWith(
         expect.stringContaining('[Best-Effort]'),
-        expect.anything()
+        expect.objectContaining({}) // Expecting context object as second arg
       );
       expect(console.error).not.toHaveBeenCalled();
     });
@@ -492,7 +492,7 @@ describe('Server', () => {
       // Verify it was logged as an error
       expect(console.error).toHaveBeenCalledWith(
         expect.stringContaining('Error forwarding event'),
-        expect.anything()
+        expect.objectContaining({}) // Expecting context object or error as second arg
       );
       // And definitely not a best-effort warning
       expect(console.warn).not.toHaveBeenCalledWith(
@@ -538,7 +538,8 @@ describe('Server', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('token rejected')
+        expect.stringContaining('token rejected'),
+        expect.objectContaining({})
       );
     });
 
