@@ -478,6 +478,38 @@ describe('Server', () => {
       expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
     });
 
+    it('should treat insights.daily.published events as critical (log error on failure)', async () => {
+      // Force all consumers to fail
+      fetchMock.mockRejectedValue(new Error('Network Down'));
+
+      const payload = {
+        type: 'insights.daily.published',
+        source: 'semantAH',
+        payload: {
+          url: 'https://example.com/insights.json',
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      // Wait a tick for the async promise rejection handling (logging)
+      await new Promise(process.nextTick);
+
+      // Verify it was logged as an error
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('Error forwarding event'),
+        expect.anything() // Expecting context/error as second arg
+      );
+      // And definitely not a best-effort warning
+      expect(console.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('[Best-Effort]'),
+        expect.anything()
+      );
+      // Verify "Event forwarded" success log is NOT called
+      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
+    });
+
     it('should explicitly treat integrity.summary.published.v1 as best-effort on non-2xx response (warn instead of error)', async () => {
       // Mock 500 Internal Server Error response (non-reject path)
       fetchMock.mockResolvedValue({
