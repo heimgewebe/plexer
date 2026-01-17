@@ -471,6 +471,41 @@ describe('Server', () => {
       expect(console.error).not.toHaveBeenCalled();
     });
 
+    it('should explicitly treat integrity.summary.published.v1 as best-effort on non-2xx response (warn instead of error)', async () => {
+      // Mock 500 Internal Server Error response (non-reject path)
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: async () => ({}),
+      });
+
+      const payload = {
+        type: 'integrity.summary.published.v1',
+        source: 'semantAH',
+        payload: {
+          repo: 'semantAH',
+          url: 'https://example.com/summary.json',
+          generated_at: '2025-01-01T12:00:00Z',
+          status: 'OK'
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      await new Promise(process.nextTick);
+
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining('[Best-Effort]'),
+        expect.objectContaining({
+          status: 500,
+          type: 'integrity.summary.published.v1'
+        })
+      );
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
     it('should treat normal events as critical (log error on failure)', async () => {
       // Force all consumers to fail
       fetchMock.mockRejectedValue(new Error('Network Down'));

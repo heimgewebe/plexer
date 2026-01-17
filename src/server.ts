@@ -278,10 +278,16 @@ export function createServer(): Express {
               console.log('Event forwarded', logData);
 
               const errorMessage = `Error forwarding event to ${label}:`;
+              const context = {
+                label,
+                type: normalizedType,
+                error: error instanceof Error ? error.message : String(error),
+              };
+
               if (BEST_EFFORT_EVENTS.has(normalizedType)) {
-                console.warn(`[Best-Effort] ${errorMessage}`, error);
+                console.warn(`[Best-Effort] ${errorMessage}`, context);
               } else {
-                console.error(errorMessage, error);
+                console.error(errorMessage, context);
               }
             })
             .finally(() => {
