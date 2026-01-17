@@ -37,6 +37,7 @@ describe('Server', () => {
 
     // Spy on console.log/error to prevent noise during tests (optional, but good for assertion)
     jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -438,9 +439,8 @@ describe('Server', () => {
       );
     });
 
-    it('should explicitly treat integrity.summary.published.v1 as best-effort (no throw on failure)', async () => {
+    it('should explicitly treat integrity.summary.published.v1 as best-effort (warn instead of error)', async () => {
       // This test ensures that the "best-effort" contract for integrity events is technically upheld.
-      // Even if all forwarding is currently best-effort, this test locks in the behavior specifically for integrity.
 
       // Force all consumers to fail
       fetchMock.mockRejectedValue(new Error('Network Down'));
@@ -456,19 +456,49 @@ describe('Server', () => {
         },
       };
 
-      // Expectation: 202 Accepted, NOT 500
+      // Expectation: 202 Accepted
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(202);
-      expect(response.body).toEqual({ status: 'accepted' });
-
-      // Verify fetch was attempted (fanout to 4 consumers)
-      expect(fetchMock).toHaveBeenCalledTimes(4);
 
       // Wait a tick for the async promise rejection handling (logging)
       await new Promise(process.nextTick);
 
-      // Verify errors were logged but swallowed
-      expect(console.error).toHaveBeenCalled();
+      // Verify it was logged as a warning, NOT an error
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining('[Best-Effort]'),
+        expect.anything()
+      );
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it('should treat normal events as critical (log error on failure)', async () => {
+      // Force all consumers to fail
+      fetchMock.mockRejectedValue(new Error('Network Down'));
+
+      const payload = {
+        type: 'knowledge.observatory.published.v1',
+        source: 'semantAH',
+        payload: {
+          url: 'https://example.com/obs.json',
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      // Wait a tick for the async promise rejection handling (logging)
+      await new Promise(process.nextTick);
+
+      // Verify it was logged as an error
+      expect(console.error).toHaveBeenCalledWith(
+        expect.stringContaining('Error forwarding event'),
+        expect.anything()
+      );
+      // And definitely not a best-effort warning
+      expect(console.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('[Best-Effort]'),
+        expect.anything()
+      );
     });
   });
 

@@ -5,6 +5,7 @@ import { PlexerEvent } from './types';
 import {
   BROADCAST_EVENTS,
   EVENT_INSIGHTS_DAILY_PUBLISHED,
+  BEST_EFFORT_EVENTS,
 } from './constants';
 
 const MAX_STRING_LENGTH = 256;
@@ -244,7 +245,12 @@ export function createServer(): Express {
                 if (response.status === 401 || response.status === 403) {
                   errorMessage += ' (token rejected)';
                 }
-                console.error(errorMessage);
+
+                if (BEST_EFFORT_EVENTS.has(normalizedType)) {
+                  console.warn(`[Best-Effort] ${errorMessage}`);
+                } else {
+                  console.error(errorMessage);
+                }
               }
             })
             .catch((error) => {
@@ -264,7 +270,13 @@ export function createServer(): Express {
               }
 
               console.log('Event forwarded', logData);
-              console.error(`Error forwarding event to ${label}:`, error);
+
+              const errorMessage = `Error forwarding event to ${label}:`;
+              if (BEST_EFFORT_EVENTS.has(normalizedType)) {
+                console.warn(`[Best-Effort] ${errorMessage}`, error);
+              } else {
+                console.error(errorMessage, error);
+              }
             })
             .finally(() => {
               pendingFetches.delete(fetchPromise);
