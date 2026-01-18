@@ -253,6 +253,7 @@ export function createServer(): Express {
                 };
 
                 if (BEST_EFFORT_EVENTS.has(normalizedType)) {
+                  // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
                   context.log_kind = 'best_effort_forward_failed';
                   console.warn(`[Best-Effort] ${errorMessage}`, context);
                 } else {
@@ -269,6 +270,7 @@ export function createServer(): Express {
               };
 
               if (BEST_EFFORT_EVENTS.has(normalizedType)) {
+                // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
                 context.log_kind = 'best_effort_forward_failed';
                 console.warn(`[Best-Effort] ${errorMessage}`, context);
               } else {
