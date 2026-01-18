@@ -472,7 +472,9 @@ describe('Server', () => {
       expect(console.warn).toHaveBeenCalledWith(
         expect.stringContaining('[Best-Effort]'),
         expect.objectContaining({
-          kind: 'best_effort_forward_failed',
+          log_kind: 'best_effort_forward_failed',
+          type: 'integrity.summary.published.v1',
+          label: expect.any(String),
         })
       );
       expect(console.error).not.toHaveBeenCalled();
@@ -542,7 +544,8 @@ describe('Server', () => {
         expect.objectContaining({
           status: 500,
           type: 'integrity.summary.published.v1',
-          kind: 'best_effort_forward_failed',
+          log_kind: 'best_effort_forward_failed',
+          label: expect.any(String),
         })
       );
       expect(console.error).not.toHaveBeenCalled();

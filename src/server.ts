@@ -253,7 +253,7 @@ export function createServer(): Express {
                 };
 
                 if (BEST_EFFORT_EVENTS.has(normalizedType)) {
-                  context.kind = 'best_effort_forward_failed';
+                  context.log_kind = 'best_effort_forward_failed';
                   console.warn(`[Best-Effort] ${errorMessage}`, context);
                 } else {
                   console.error(errorMessage, context);
@@ -269,7 +269,7 @@ export function createServer(): Express {
               };
 
               if (BEST_EFFORT_EVENTS.has(normalizedType)) {
-                context.kind = 'best_effort_forward_failed';
+                context.log_kind = 'best_effort_forward_failed';
                 console.warn(`[Best-Effort] ${errorMessage}`, context);
               } else {
                 console.error(errorMessage, context);
