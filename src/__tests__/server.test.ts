@@ -471,7 +471,11 @@ describe('Server', () => {
       // Verify it was logged as a warning, NOT an error
       expect(console.warn).toHaveBeenCalledWith(
         expect.stringContaining('[Best-Effort]'),
-        expect.anything() // Expecting context/error as second arg
+        expect.objectContaining({
+          log_kind: 'best_effort_forward_failed',
+          type: 'integrity.summary.published.v1',
+          label: expect.any(String),
+        })
       );
       expect(console.error).not.toHaveBeenCalled();
       // Verify "Event forwarded" success log is NOT called
@@ -539,7 +543,9 @@ describe('Server', () => {
         expect.stringContaining('[Best-Effort]'),
         expect.objectContaining({
           status: 500,
-          type: 'integrity.summary.published.v1'
+          type: 'integrity.summary.published.v1',
+          log_kind: 'best_effort_forward_failed',
+          label: expect.any(String),
         })
       );
       expect(console.error).not.toHaveBeenCalled();
@@ -639,7 +645,6 @@ describe('Server', () => {
         'Event forwarded',
         expect.objectContaining({
           publisher: 'test-source',
-          status: 'success',
         })
       );
     });
@@ -668,7 +673,6 @@ describe('Server', () => {
         expect.objectContaining({
           publisher: 'heimgewebe/semantAH',
           repo: 'semantAH',
-          status: 'success',
         })
       );
     });

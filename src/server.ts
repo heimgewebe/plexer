@@ -226,7 +226,6 @@ export function createServer(): Express {
                 event_id: eventId,
                 publisher: normalizedSource,
                 delivered_to: label,
-                status: response.ok ? 'success' : 'failure',
                 statusCode: response.status,
                 auth: !!token,
               };
@@ -247,13 +246,15 @@ export function createServer(): Express {
                   errorMessage += ' (token rejected)';
                 }
 
-                const context = {
+                const context: Record<string, unknown> = {
                   status: response.status,
                   label,
                   type: normalizedType,
                 };
 
                 if (BEST_EFFORT_EVENTS.has(normalizedType)) {
+                  // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
+                  context.log_kind = 'best_effort_forward_failed';
                   console.warn(`[Best-Effort] ${errorMessage}`, context);
                 } else {
                   console.error(errorMessage, context);
@@ -262,13 +263,15 @@ export function createServer(): Express {
             })
             .catch((error) => {
               const errorMessage = `Error forwarding event to ${label}:`;
-              const context = {
+              const context: Record<string, unknown> = {
                 label,
                 type: normalizedType,
                 error: error instanceof Error ? error.message : String(error),
               };
 
               if (BEST_EFFORT_EVENTS.has(normalizedType)) {
+                // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
+                context.log_kind = 'best_effort_forward_failed';
                 console.warn(`[Best-Effort] ${errorMessage}`, context);
               } else {
                 console.error(errorMessage, context);
