@@ -16,7 +16,21 @@ jest.mock('../config', () => ({
     leitstandToken: 'leitstand-secret-token',
     hauskiToken: 'hauski-secret-token',
     chronikToken: 'chronik-secret-token',
+    dataDir: 'data',
   },
+}));
+
+// Mock delivery to avoid side effects
+jest.mock('../delivery', () => ({
+  saveFailedEvent: jest.fn().mockResolvedValue(undefined),
+  getDeliveryMetrics: jest.fn().mockReturnValue({
+    counts: { pending: 0, failed: 0 },
+    last_error: null,
+    last_retry_at: null,
+    retryable_now: 0,
+    next_due_at: null,
+  }),
+  retryFailedEvents: jest.fn().mockResolvedValue(undefined),
 }));
 
 describe('Server', () => {
@@ -156,7 +170,7 @@ describe('Server', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer chronik-secret-token',
+          'X-Auth': 'chronik-secret-token',
         },
         body: expectedBody,
       });
@@ -222,7 +236,7 @@ describe('Server', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer chronik-secret-token',
+          'X-Auth': 'chronik-secret-token',
         },
         body: expectedBody,
       });

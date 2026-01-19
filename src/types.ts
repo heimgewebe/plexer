@@ -11,6 +11,8 @@ export interface PlexerDeliveryReport {
   };
   last_error: string | null;
   last_retry_at: string | null;
+  retryable_now: number;
+  next_due_at: string | null;
 }
 
 export interface FailedEvent {

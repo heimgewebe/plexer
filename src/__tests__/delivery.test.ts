@@ -4,10 +4,15 @@ import { saveFailedEvent, getDeliveryMetrics } from '../delivery';
 // Mock fs
 jest.mock('fs/promises');
 
+// Mock proper-lockfile
+jest.mock('proper-lockfile', () => ({
+  lock: jest.fn().mockResolvedValue(() => Promise.resolve()),
+}));
+
 // Mock consumers
 jest.mock('../consumers', () => ({
   CONSUMERS: [
-    { key: 'test-consumer', label: 'Test Consumer', url: 'http://test.local', token: 'token' },
+    { key: 'test-consumer', label: 'Test Consumer', url: 'http://test.local', token: 'token', authKind: 'bearer' },
   ],
 }));
 
@@ -21,6 +26,7 @@ describe('Delivery', () => {
       const event = { type: 'test', source: 'src', payload: {} };
       (fs.appendFile as jest.Mock).mockResolvedValue(undefined);
       (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
+      (fs.access as jest.Mock).mockResolvedValue(undefined); // File exists
 
       await saveFailedEvent(event, 'test-consumer', 'some error');
 
@@ -30,6 +36,16 @@ describe('Delivery', () => {
         'utf8'
       );
     });
+
+    it('should not save invalid event (missing consumerKey implied args)', async () => {
+       // saveFailedEvent interface requires consumerKey, so TS prevents missing it,
+       // but we can test invalid payload structure passed in event
+       const invalidEvent = { type: 'test' } as any; // Missing source/payload
+
+       await saveFailedEvent(invalidEvent, 'test-consumer', 'err');
+
+       expect(fs.appendFile).not.toHaveBeenCalled();
+    });
   });
 
   describe('getDeliveryMetrics', () => {
@@ -37,6 +53,8 @@ describe('Delivery', () => {
       const metrics = getDeliveryMetrics(5);
       expect(metrics.counts.pending).toBe(5);
       expect(metrics.counts.failed).toBeDefined();
+      expect(metrics).toHaveProperty('retryable_now');
+      expect(metrics).toHaveProperty('next_due_at');
     });
   });
 });

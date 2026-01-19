@@ -188,7 +188,7 @@ export function createServer(): Express {
 
       const eventId = randomUUID();
 
-      CONSUMERS.forEach(({ key, label, url, token }) => {
+      CONSUMERS.forEach(({ key, label, url, token, authKind }) => {
         if (!url) return;
 
         if (!shouldForward(normalizedType, key)) {
@@ -200,7 +200,11 @@ export function createServer(): Express {
             'Content-Type': 'application/json',
           };
           if (token) {
-            headers.Authorization = `Bearer ${token}`;
+            if (authKind === 'x-auth') {
+              headers['X-Auth'] = token;
+            } else {
+              headers['Authorization'] = `Bearer ${token}`;
+            }
           }
 
           const fetchPromise = fetch(url, {
