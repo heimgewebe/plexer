@@ -12,6 +12,7 @@ import {
   saveFailedEvent,
   getDeliveryMetrics,
   validateDeliveryReport,
+  validateEventEnvelope,
 } from './delivery';
 
 const MAX_STRING_LENGTH = 256;
@@ -112,34 +113,18 @@ export function createServer(): Express {
     ) => {
       const body = req.body;
 
-      if (
-        !body ||
-        typeof body !== 'object' ||
-        !('type' in body) ||
-        !('source' in body) ||
-        !('payload' in body)
-      ) {
+      // Validate against envelope schema
+      if (!validateEventEnvelope(body)) {
         return res.status(400).json({
           status: 'error',
-          message: 'Event must include type, source and payload',
+          message: 'Invalid event envelope',
+          errors: validateEventEnvelope.errors,
         });
       }
 
       const { type, source, payload } = body as unknown as PlexerEvent;
 
-      if (
-        typeof type !== 'string' ||
-        !type.trim() ||
-        typeof source !== 'string' ||
-        !source.trim() ||
-        typeof payload === 'undefined'
-      ) {
-        return res.status(400).json({
-          status: 'error',
-          message: `Event must include non-empty type & source (max ${MAX_STRING_LENGTH} chars) and payload`,
-        });
-      }
-
+      // Additional manual checks (trimming logic)
       const normalizedType = type.trim();
       const normalizedSource = source.trim();
 

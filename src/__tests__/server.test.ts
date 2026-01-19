@@ -32,6 +32,18 @@ jest.mock('../delivery', () => ({
   }),
   retryFailedEvents: jest.fn().mockResolvedValue(undefined),
   validateDeliveryReport: jest.fn().mockReturnValue(true),
+  // Basic mock validation to prevent crashes in tests that send invalid data
+  validateEventEnvelope: jest.fn().mockImplementation((body) => {
+    const isValid =
+      body &&
+      typeof body === 'object' &&
+      typeof body.type === 'string' &&
+      body.type.trim().length > 0 &&
+      typeof body.source === 'string' &&
+      body.source.trim().length > 0 &&
+      body.payload !== undefined;
+    return isValid;
+  }),
 }));
 
 describe('Server', () => {
@@ -389,7 +401,7 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(400);
-      expect(response.body.message).toContain('Event must include');
+      expect(response.body.message).toContain('Invalid event envelope');
     });
 
     it('should reject missing source', async () => {

@@ -24,9 +24,11 @@ addFormats(ajv);
 // Load vendored schemas
 import failedEventSchema from './vendor/schemas/plexer/failed_event.v1.schema.json';
 import deliveryReportSchema from './vendor/schemas/plexer/delivery.report.v1.schema.json';
+import eventEnvelopeSchema from './vendor/schemas/plexer/event.envelope.v1.schema.json';
 
 const validateFailedEvent = ajv.compile(failedEventSchema);
 export const validateDeliveryReport = ajv.compile(deliveryReportSchema);
+export const validateEventEnvelope = ajv.compile(eventEnvelopeSchema);
 
 async function ensureDataDir() {
   try {
