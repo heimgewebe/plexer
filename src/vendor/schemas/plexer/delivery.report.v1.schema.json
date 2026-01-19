@@ -16,9 +16,9 @@
       "additionalProperties": false
     },
     "last_error": { "type": ["string", "null"] },
-    "last_retry_at": { "type": ["string", "null"] },
-    "retryable_now": { "type": ["integer", "null"], "minimum": 0 },
-    "next_due_at": { "type": ["string", "null"] }
+    "last_retry_at": { "type": ["string", "null"], "format": "date-time" },
+    "retryable_now": { "type": "integer", "minimum": 0 },
+    "next_due_at": { "type": ["string", "null"], "format": "date-time" }
   },
   "additionalProperties": false
 }

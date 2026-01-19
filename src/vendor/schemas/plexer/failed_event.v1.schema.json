@@ -22,8 +22,8 @@
       }
     },
     "retryCount": { "type": "integer", "minimum": 0 },
-    "lastAttempt": { "type": "string" },
-    "nextAttempt": { "type": "string" },
+    "lastAttempt": { "type": "string", "format": "date-time" },
+    "nextAttempt": { "type": "string", "format": "date-time" },
     "error": { "type": "string" }
   },
   "additionalProperties": false

@@ -65,11 +65,23 @@ Alle URL-Variablen müssen vollqualifiziert sein (inkl. Schema `https://…`).
 
 Plexer wendet automatisch den korrekten Auth-Header je nach Zielsystem an.
 
-## Reliability & Best-Effort
+## Reliability & Contracts
 
-- **Critical Events** (z.B. `knowledge.observatory.published.v1`): Werden bei Fehlschlag in der Queue (`failed_forwards.jsonl`) gespeichert und mit exponential backoff wiederholt.
-- **Best-Effort Events** (z.B. `integrity.summary.published.v1`): Werden bei Fehlschlag nur geloggt (Warning), aber **nicht** wiederholt, um unnötige Last zu vermeiden (da Integritätsdaten meist pull-basiert sind).
+### Persistence & Queue
+Plexer nutzt eine persistente, dateibasierte Queue (`failed_forwards.jsonl`), um Events auch bei temporären Ausfällen der Konsumenten zuzustellen. Die Verarbeitung erfolgt thread-safe über `proper-lockfile` (Locking auf `failed_forwards.lock`), sodass mehrere Prozesse oder Neustarts keine Datenkorruption verursachen.
+
+### Critical vs. Best-Effort Events
+Die Unterscheidung erfolgt derzeit basierend auf der Konstantenliste in `src/constants.ts`:
+
+- **Critical Events** (z.B. `knowledge.observatory.published.v1`, `insights.daily.published`): Werden bei Fehlschlag in der Queue gespeichert und mit exponential backoff wiederholt.
+- **Best-Effort Events** (z.B. `integrity.summary.published.v1`): Dienen primär als optionale Hinting-Signale für Pull-Mechanismen. Bei Fehlschlag werden sie nur als Warning geloggt und verworfen, um die Queue nicht zu verstopfen.
+
+### Contracts Ownership
+Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports liegen in `src/vendor/schemas/`.
+**Wichtig:** Diese Dateien sind Kopien (Vendoring) der kanonischen Definitionen aus dem **Metarepo** (`heimgewebe/metarepo/contracts/plexer/`). Änderungen dürfen nicht hier, sondern nur im Metarepo erfolgen und müssen dann synchronisiert werden.
 
 ## Observability
 
-- `GET /status`: Liefert Metriken zur Delivery-Queue (pending requests, failed events count, next retry due date).
+- `GET /status`: Liefert Metriken zur Delivery-Queue.
+  - Payload folgt dem Contract: `plexer.delivery.report.v1`.
+  - Felder: `pending` (in-flight), `failed` (in queue), `retryable_now` (fällig), `next_due_at` (nächster Retry).

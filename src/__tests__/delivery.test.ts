@@ -30,6 +30,9 @@ describe('Delivery', () => {
 
       await saveFailedEvent(event, 'test-consumer', 'some error');
 
+      // Now we expect lock to be called on lock file, and append to jsonl
+      // Since lock mock is global, we assume it works.
+      // We verify appendFile is called correctly.
       expect(fs.appendFile).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
         expect.stringContaining('"consumerKey":"test-consumer"'),
