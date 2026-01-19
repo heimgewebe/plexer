@@ -54,11 +54,43 @@ async function ensureDataDir() {
   } catch {}
 }
 
-// Initial counts scan (best effort)
+// Initial startup: crash recovery and metrics scan
 (async () => {
   try {
     await ensureDataDir();
-    // Create empty file if not exists to avoid lock errors
+
+    // 1. Crash Recovery: Check for orphaned processing files
+    const files = await fs.readdir(DATA_DIR);
+    const processingFiles = files.filter((f) => f.startsWith('processing.') && f.endsWith('.jsonl'));
+
+    if (processingFiles.length > 0) {
+      console.log(`Found ${processingFiles.length} orphaned processing files. Recovering...`);
+
+      // Ensure FAILED_LOG exists
+      try { await fs.access(FAILED_LOG); } catch { await fs.writeFile(FAILED_LOG, ''); }
+
+      let release;
+      try {
+        release = await lock(FAILED_LOG, { retries: 3 });
+        for (const file of processingFiles) {
+          const filePath = path.join(DATA_DIR, file);
+          try {
+            const content = await fs.readFile(filePath, 'utf8');
+            // Append content directly
+            await fs.appendFile(FAILED_LOG, content);
+            await fs.unlink(filePath);
+          } catch (e) {
+            console.error(`Failed to recover orphaned file ${file}:`, e);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to lock FAILED_LOG during recovery:', e);
+      } finally {
+        if (release) await release();
+      }
+    }
+
+    // 2. Metrics Scan
     try {
       await fs.access(FAILED_LOG);
     } catch {
@@ -85,7 +117,9 @@ async function ensureDataDir() {
     }
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
-  } catch {}
+  } catch (err) {
+    console.error('Error during startup initialization:', err);
+  }
 })();
 
 export async function saveFailedEvent(
@@ -290,9 +324,10 @@ export async function retryFailedEvents(): Promise<void> {
       await batchAppendEvents(remainingEvents);
     }
 
-    // Update global metrics (approximate, based on last read)
-    // To be accurate we'd need to re-read FAILED_LOG but that's expensive.
-    // We can just rely on the next periodic scan or saveFailedEvent updates.
+    // Reset global metrics based on remaining events
+    failedCount = remainingEvents.length;
+    retryableNowCount = rNow;
+    nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
 
   } catch (err) {
     console.error('Error processing failed events:', err);
@@ -307,7 +342,6 @@ async function batchAppendEvents(entries: FailedEvent[]) {
     try {
         release = await lock(FAILED_LOG, { retries: 3 });
         await fs.appendFile(FAILED_LOG, lines, 'utf8');
-        failedCount += entries.length;
     } catch(e) {
         console.error('Failed to batch requeue events', e);
     } finally {
@@ -326,4 +360,8 @@ export function getDeliveryMetrics(pendingCount: number): PlexerDeliveryReport {
     retryable_now: retryableNowCount,
     next_due_at: nextDueAt,
   };
+}
+
+export function getNextDueAt(): string | null {
+  return nextDueAt;
 }

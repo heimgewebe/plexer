@@ -1,11 +1,30 @@
 import { createServer, drainPendingRequests } from './server';
 import { config } from './config';
-import { retryFailedEvents } from './delivery';
+import { retryFailedEvents, getNextDueAt } from './delivery';
 
 const app = createServer();
 const RETRY_INTERVAL_MS = 60 * 1000;
+const MIN_RETRY_DELAY_MS = 5000;
 
 function scheduleRetry() {
+  const nextDue = getNextDueAt();
+  let delay = RETRY_INTERVAL_MS;
+
+  if (nextDue) {
+    const now = Date.now();
+    const dueTime = new Date(nextDue).getTime();
+    const diff = dueTime - now;
+
+    // Clamp delay between 5s and 60s
+    delay = Math.min(RETRY_INTERVAL_MS, Math.max(MIN_RETRY_DELAY_MS, diff));
+  }
+
+  // Add jitter (+/- 1s)
+  delay += (Math.random() - 0.5) * 2000;
+
+  // Ensure non-negative
+  if (delay < MIN_RETRY_DELAY_MS) delay = MIN_RETRY_DELAY_MS;
+
   setTimeout(() => {
     retryFailedEvents()
       .catch((err) => {
@@ -14,7 +33,7 @@ function scheduleRetry() {
       .finally(() => {
         scheduleRetry();
       });
-  }, RETRY_INTERVAL_MS);
+  }, delay);
 }
 
 scheduleRetry();
