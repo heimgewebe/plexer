@@ -9,9 +9,7 @@
       "required": ["pending", "failed"],
       "properties": {
         "pending": { "type": "integer", "minimum": 0 },
-        "failed": { "type": "integer", "minimum": 0 },
-        "retried": { "type": "integer", "minimum": 0 },
-        "delivered": { "type": "integer", "minimum": 0 }
+        "failed": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     },

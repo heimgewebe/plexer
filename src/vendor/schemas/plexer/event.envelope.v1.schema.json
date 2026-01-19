@@ -4,9 +4,9 @@
   "type": "object",
   "required": ["type", "source", "payload"],
   "properties": {
-    "type": { "type": "string", "maxLength": 256, "pattern": "^[a-z0-9.]+$" },
+    "type": { "type": "string", "maxLength": 256, "pattern": "^[A-Za-z0-9._-]+$" },
     "source": { "type": "string", "maxLength": 256 },
-    "payload": { "type": "object" }
+    "payload": {}
   },
   "additionalProperties": false
 }

@@ -212,8 +212,6 @@ export async function retryFailedEvents(): Promise<void> {
     // 5. Process the renamed file (processingFile)
     const remainingEvents: FailedEvent[] = [];
     const now = Date.now();
-    let minNext = Infinity;
-    let rNow = 0;
 
     for (const line of lines) {
       let entry: FailedEvent;
@@ -241,7 +239,6 @@ export async function retryFailedEvents(): Promise<void> {
           entry.error = 'Consumer configuration missing';
 
           remainingEvents.push(entry);
-          updateMetrics(entry);
           continue;
         }
 
@@ -291,21 +288,11 @@ export async function retryFailedEvents(): Promise<void> {
           );
 
           remainingEvents.push(entry);
-          updateMetrics(entry);
         }
       } else {
         // Not time yet -> Re-queue
         remainingEvents.push(entry);
-        updateMetrics(entry);
       }
-    }
-
-    function updateMetrics(e: FailedEvent) {
-       const n = new Date(e.nextAttempt).getTime();
-       if (!isNaN(n)) {
-          if (n < minNext) minNext = n;
-          if (n <= Date.now()) rNow++;
-       }
     }
 
     // Cleanup processing file
@@ -317,6 +304,18 @@ export async function retryFailedEvents(): Promise<void> {
     }
 
     // Reset global metrics based on remaining events
+    let minNext = Infinity;
+    let rNow = 0;
+    const nowAfter = Date.now();
+
+    for (const e of remainingEvents) {
+       const n = new Date(e.nextAttempt).getTime();
+       if (!isNaN(n)) {
+          if (n < minNext) minNext = n;
+          if (n <= nowAfter) rNow++;
+       }
+    }
+
     failedCount = remainingEvents.length;
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();

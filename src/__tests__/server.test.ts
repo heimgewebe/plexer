@@ -473,6 +473,35 @@ describe('Server', () => {
       expect(response.body).toEqual({ status: 'accepted' });
     });
 
+    it('should accept diverse payloads (array, string, null) due to relaxed schema', async () => {
+      const payloads = [
+        [],
+        "some string",
+        null,
+        123
+      ];
+
+      for (const p of payloads) {
+        const payload = {
+          type: 'test.relaxed',
+          source: 'test',
+          payload: p
+        };
+        const response = await request(app).post('/events').send(payload);
+        expect(response.status).toBe(202);
+      }
+    });
+
+    it('should accept mixed-case types due to relaxed schema pattern', async () => {
+        const payload = {
+            type: 'Test.Event_With-Mixed.Case',
+            source: 'test',
+            payload: {}
+        };
+        const response = await request(app).post('/events').send(payload);
+        expect(response.status).toBe(202);
+    });
+
     it('should support insights.daily.published event (notification only)', async () => {
       // This test codifies the contract for the daily insights notification event
       const payload = {
