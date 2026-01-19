@@ -10,6 +10,7 @@ export interface Config {
   hauskiToken?: string;
   chronikUrl?: string;
   chronikToken?: string;
+  dataDir: string;
 }
 
 const getEnv = (name: string): string | undefined => {
@@ -76,4 +77,5 @@ export const config: Config = {
     getEnv('LEITSTAND_TOKEN') || getEnv('LEITSTAND_EVENTS_TOKEN'),
   hauskiToken: getEnv('HAUSKI_TOKEN') || getEnv('HAUSKI_EVENTS_TOKEN'),
   chronikToken: getEnv('CHRONIK_TOKEN') || getEnv('CHRONIK_EVENTS_TOKEN'),
+  dataDir: getEnv('PLEXER_DATA_DIR') || 'data',
 };

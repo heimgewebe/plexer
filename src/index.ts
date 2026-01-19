@@ -1,7 +1,23 @@
 import { createServer, drainPendingRequests } from './server';
 import { config } from './config';
+import { retryFailedEvents } from './delivery';
 
 const app = createServer();
+const RETRY_INTERVAL_MS = 60 * 1000;
+
+function scheduleRetry() {
+  setTimeout(() => {
+    retryFailedEvents()
+      .catch((err) => {
+        console.error('Failed to retry events:', err);
+      })
+      .finally(() => {
+        scheduleRetry();
+      });
+  }, RETRY_INTERVAL_MS);
+}
+
+scheduleRetry();
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`Server is running on http://${config.host}:${config.port}`);

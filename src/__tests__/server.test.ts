@@ -16,7 +16,21 @@ jest.mock('../config', () => ({
     leitstandToken: 'leitstand-secret-token',
     hauskiToken: 'hauski-secret-token',
     chronikToken: 'chronik-secret-token',
+    dataDir: 'data',
   },
+}));
+
+// Mock delivery to avoid side effects
+jest.mock('../delivery', () => ({
+  saveFailedEvent: jest.fn().mockResolvedValue(undefined),
+  getDeliveryMetrics: jest.fn().mockReturnValue({
+    counts: { pending: 0, failed: 0 },
+    last_error: null,
+    last_retry_at: null,
+    retryable_now: 0,
+    next_due_at: null,
+  }),
+  retryFailedEvents: jest.fn().mockResolvedValue(undefined),
 }));
 
 describe('Server', () => {
@@ -59,6 +73,17 @@ describe('Server', () => {
       const response = await request(app).get('/health');
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ status: 'ok' });
+    });
+  });
+
+  describe('GET /status', () => {
+    it('should return delivery report', async () => {
+      const response = await request(app).get('/status');
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('type', 'plexer.delivery.report.v1');
+      expect(response.body.payload).toHaveProperty('counts');
+      expect(response.body.payload.counts).toHaveProperty('pending');
+      expect(response.body.payload.counts).toHaveProperty('failed');
     });
   });
 
@@ -145,7 +170,7 @@ describe('Server', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer chronik-secret-token',
+          'X-Auth': 'chronik-secret-token',
         },
         body: expectedBody,
       });
@@ -211,7 +236,7 @@ describe('Server', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer chronik-secret-token',
+          'X-Auth': 'chronik-secret-token',
         },
         body: expectedBody,
       });
