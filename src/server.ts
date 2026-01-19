@@ -7,37 +7,12 @@ import {
   EVENT_INSIGHTS_DAILY_PUBLISHED,
   BEST_EFFORT_EVENTS,
 } from './constants';
+import { CONSUMERS } from './consumers';
+import { saveFailedEvent, getDeliveryMetrics } from './delivery';
 
 const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
-
-const CONSUMERS = [
-  {
-    key: 'heimgeist',
-    label: 'Heimgeist',
-    url: config.heimgeistUrl,
-    token: config.heimgeistToken,
-  },
-  {
-    key: 'leitstand',
-    label: 'Leitstand',
-    url: config.leitstandUrl,
-    token: config.leitstandToken,
-  },
-  {
-    key: 'hauski',
-    label: 'hausKI',
-    url: config.hauskiUrl,
-    token: config.hauskiToken,
-  },
-  {
-    key: 'chronik',
-    label: 'Chronik',
-    url: config.chronikUrl,
-    token: config.chronikToken,
-  },
-];
 
 function tryJson(value: unknown): { json: string | null } {
   try {
@@ -62,6 +37,10 @@ function shouldForward(eventType: string, consumerKey: string): boolean {
     return true;
   }
   return consumerKey === 'heimgeist';
+}
+
+export function getPendingRequestCount(): number {
+  return pendingFetches.size;
 }
 
 export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
@@ -100,6 +79,14 @@ export function createServer(): Express {
 
   app.get('/health', (req: Request, res: Response) => {
     res.json({ status: 'ok' });
+  });
+
+  app.get('/status', (req: Request, res: Response) => {
+    const report = getDeliveryMetrics(getPendingRequestCount());
+    res.json({
+      type: 'plexer.delivery.report.v1',
+      payload: report,
+    });
   });
 
   app.post(
@@ -257,6 +244,17 @@ export function createServer(): Express {
                   context.log_kind = 'best_effort_forward_failed';
                   console.warn(`[Best-Effort] ${errorMessage}`, context);
                 } else {
+                  saveFailedEvent(
+                    {
+                      type: normalizedType,
+                      source: normalizedSource,
+                      payload,
+                    },
+                    key,
+                    errorMessage,
+                  ).catch((e) =>
+                    console.error('Failed to save failed event', e),
+                  );
                   console.error(errorMessage, context);
                 }
               }
@@ -274,6 +272,15 @@ export function createServer(): Express {
                 context.log_kind = 'best_effort_forward_failed';
                 console.warn(`[Best-Effort] ${errorMessage}`, context);
               } else {
+                saveFailedEvent(
+                  {
+                    type: normalizedType,
+                    source: normalizedSource,
+                    payload,
+                  },
+                  key,
+                  error instanceof Error ? error.message : String(error),
+                ).catch((e) => console.error('Failed to save failed event', e));
                 console.error(errorMessage, context);
               }
             })

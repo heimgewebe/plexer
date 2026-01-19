@@ -62,6 +62,17 @@ describe('Server', () => {
     });
   });
 
+  describe('GET /status', () => {
+    it('should return delivery report', async () => {
+      const response = await request(app).get('/status');
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('type', 'plexer.delivery.report.v1');
+      expect(response.body.payload).toHaveProperty('counts');
+      expect(response.body.payload.counts).toHaveProperty('pending');
+      expect(response.body.payload.counts).toHaveProperty('failed');
+    });
+  });
+
   describe('POST /events', () => {
     it('should forward unknown event types only to Heimgeist', async () => {
       const payload = {
