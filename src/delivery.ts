@@ -184,6 +184,7 @@ export async function retryFailedEvents(): Promise<void> {
     release = null;
 
     // 5. Process the renamed file (processingFile)
+    const remainingEvents: FailedEvent[] = [];
     const now = Date.now();
     let minNext = Infinity;
     let rNow = 0;
@@ -213,7 +214,8 @@ export async function retryFailedEvents(): Promise<void> {
           entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
           entry.error = 'Consumer configuration missing';
 
-          await saveFailedEvent(entry.event, entry.consumerKey, entry.error); // Re-queue
+          remainingEvents.push(entry);
+          updateMetrics(entry);
           continue;
         }
 
@@ -262,22 +264,31 @@ export async function retryFailedEvents(): Promise<void> {
             `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
           );
 
-          // Re-queue explicitly
-          // We manually construct the re-queue logic because saveFailedEvent resets retryCount to 0
-          // which defeats the purpose of backoff.
-          // We need a lower-level append helper or modify saveFailedEvent.
-          // For now, we manually append (with lock) via a helper or direct duplication.
-          // Direct duplication is safer to avoid modifying saveFailedEvent contract for now.
-          await requeueEvent(entry);
+          remainingEvents.push(entry);
+          updateMetrics(entry);
         }
       } else {
         // Not time yet -> Re-queue
-        await requeueEvent(entry);
+        remainingEvents.push(entry);
+        updateMetrics(entry);
       }
+    }
+
+    function updateMetrics(e: FailedEvent) {
+       const n = new Date(e.nextAttempt).getTime();
+       if (!isNaN(n)) {
+          if (n < minNext) minNext = n;
+          if (n <= Date.now()) rNow++;
+       }
     }
 
     // Cleanup processing file
     await fs.unlink(processingFile);
+
+    // Batch write remaining events
+    if (remainingEvents.length > 0) {
+      await batchAppendEvents(remainingEvents);
+    }
 
     // Update global metrics (approximate, based on last read)
     // To be accurate we'd need to re-read FAILED_LOG but that's expensive.
@@ -290,19 +301,15 @@ export async function retryFailedEvents(): Promise<void> {
   }
 }
 
-async function requeueEvent(entry: FailedEvent) {
-   // Minimal append with lock, similar to saveFailedEvent but preserving entry state
-    const line = JSON.stringify(entry) + '\n';
+async function batchAppendEvents(entries: FailedEvent[]) {
+    const lines = entries.map(e => JSON.stringify(e)).join('\n') + '\n';
     let release;
     try {
         release = await lock(FAILED_LOG, { retries: 3 });
-        await fs.appendFile(FAILED_LOG, line, 'utf8');
-        failedCount++;
-        // We assume failedCount is monotonic increasing with appends,
-        // but since we process files and delete them, the count is actually tricky.
-        // It's better to just increment here.
+        await fs.appendFile(FAILED_LOG, lines, 'utf8');
+        failedCount += entries.length;
     } catch(e) {
-        console.error('Failed to requeue event', e);
+        console.error('Failed to batch requeue events', e);
     } finally {
         if(release) await release();
     }
