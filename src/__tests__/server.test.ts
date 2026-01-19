@@ -88,6 +88,34 @@ describe('Server', () => {
   });
 
   describe('POST /events', () => {
+    it('should forward event with sha and schema_ref in payload', async () => {
+      const payload = {
+        type: 'knowledge.observatory.published.v1',
+        source: 'semantAH',
+        payload: {
+          url: 'https://github.com/org/repo/releases/download/v1/obs.json',
+          sha: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          schema_ref: 'https://schemas.heimgewebe.org/contracts/knowledge/observatory.schema.json',
+          generated_at: '2023-10-27T10:00:00Z',
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      // Verify fetch was called 4 times (fanout)
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+
+      // Verify payload was passed through correctly to one of the consumers (e.g. Heimgeist)
+      const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://heimgeist.local');
+      expect(callArgs).toBeDefined();
+
+      const sentBody = JSON.parse(callArgs![1].body);
+      expect(sentBody.payload).toEqual(payload.payload);
+      expect(sentBody.payload).toHaveProperty('sha', payload.payload.sha);
+      expect(sentBody.payload).toHaveProperty('schema_ref', payload.payload.schema_ref);
+    });
+
     it('should forward unknown event types only to Heimgeist', async () => {
       const payload = {
         type: 'test.event',
