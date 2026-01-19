@@ -31,6 +31,7 @@ jest.mock('../delivery', () => ({
     next_due_at: null,
   }),
   retryFailedEvents: jest.fn().mockResolvedValue(undefined),
+  validateDeliveryReport: jest.fn().mockReturnValue(true),
 }));
 
 describe('Server', () => {

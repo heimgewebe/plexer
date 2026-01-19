@@ -8,7 +8,11 @@ import {
   BEST_EFFORT_EVENTS,
 } from './constants';
 import { CONSUMERS } from './consumers';
-import { saveFailedEvent, getDeliveryMetrics } from './delivery';
+import {
+  saveFailedEvent,
+  getDeliveryMetrics,
+  validateDeliveryReport,
+} from './delivery';
 
 const MAX_STRING_LENGTH = 256;
 
@@ -83,6 +87,16 @@ export function createServer(): Express {
 
   app.get('/status', (req: Request, res: Response) => {
     const report = getDeliveryMetrics(getPendingRequestCount());
+
+    // Strict contract validation
+    if (!validateDeliveryReport(report)) {
+      console.error(
+        'Delivery report failed contract validation:',
+        validateDeliveryReport.errors,
+      );
+      // We still return it to not break ops, but log the violation
+    }
+
     res.json({
       type: 'plexer.delivery.report.v1',
       payload: report,

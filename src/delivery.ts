@@ -18,35 +18,12 @@ let nextDueAt: string | null = null;
 
 const ajv = new Ajv({ strict: true });
 
-// Minimal Schema for FailedEvent
-const failedEventSchema = {
-  type: 'object',
-  required: [
-    'consumerKey',
-    'event',
-    'retryCount',
-    'lastAttempt',
-    'nextAttempt',
-    'error',
-  ],
-  properties: {
-    consumerKey: { type: 'string' },
-    event: {
-      type: 'object',
-      required: ['type', 'source', 'payload'],
-      properties: {
-        type: { type: 'string' },
-        source: { type: 'string' },
-        payload: {},
-      },
-    },
-    retryCount: { type: 'integer', minimum: 0 },
-    lastAttempt: { type: 'string' },
-    nextAttempt: { type: 'string' },
-    error: { type: 'string' },
-  },
-};
+// Load vendored schemas
+import failedEventSchema from './contracts/failed_event.v1.schema.json';
+import deliveryReportSchema from './contracts/delivery.report.v1.schema.json';
+
 const validateFailedEvent = ajv.compile(failedEventSchema);
+export const validateDeliveryReport = ajv.compile(deliveryReportSchema);
 
 async function ensureDataDir() {
   try {
