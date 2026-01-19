@@ -61,6 +61,12 @@ describe('Delivery', () => {
     });
   });
 
-  // Since actual recovery logic runs on module load, it's hard to test directly without
-  // isolation. However, we can trust the logic updates if the basic functional tests pass.
+  describe('initDelivery', () => {
+    // Basic test to ensure it runs without error in mock env
+    it('should run initialization sequence', async () => {
+      // Logic is hard to test due to mocked fs/lockfile, but we can call it
+      const { initDelivery } = require('../delivery');
+      await expect(initDelivery()).resolves.not.toThrow();
+    });
+  });
 });

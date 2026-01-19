@@ -1,10 +1,15 @@
 import { createServer, drainPendingRequests } from './server';
 import { config } from './config';
-import { retryFailedEvents, getNextDueAt } from './delivery';
+import { retryFailedEvents, getNextDueAt, initDelivery } from './delivery';
 
 const app = createServer();
 const RETRY_INTERVAL_MS = 60 * 1000;
 const MIN_RETRY_DELAY_MS = 5000;
+
+// Initialize delivery system (recovery + metrics)
+initDelivery().catch((err) => {
+  console.error('Failed to initialize delivery system:', err);
+});
 
 function scheduleRetry() {
   const nextDue = getNextDueAt();
@@ -25,16 +30,21 @@ function scheduleRetry() {
   // Ensure non-negative
   if (delay < MIN_RETRY_DELAY_MS) delay = MIN_RETRY_DELAY_MS;
 
-  setTimeout(() => {
+  retryTimer = setTimeout(() => {
     retryFailedEvents()
       .catch((err) => {
         console.error('Failed to retry events:', err);
       })
       .finally(() => {
-        scheduleRetry();
+        if (!isShuttingDown) {
+          scheduleRetry();
+        }
       });
   }, delay);
 }
+
+let retryTimer: NodeJS.Timeout | null = null;
+let isShuttingDown = false;
 
 scheduleRetry();
 
@@ -45,6 +55,10 @@ const server = app.listen(config.port, config.host, () => {
 
 const shutdown = () => {
   console.log('Shutting down server...');
+  isShuttingDown = true;
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+  }
   server.close(async () => {
     console.log('Server closed. Draining pending requests...');
     await drainPendingRequests();

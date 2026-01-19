@@ -99,6 +99,7 @@ export function createServer(): Express {
 
     res.json({
       type: 'plexer.delivery.report.v1',
+      source: 'plexer',
       payload: report,
     });
   });

@@ -82,6 +82,7 @@ describe('Server', () => {
       const response = await request(app).get('/status');
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('type', 'plexer.delivery.report.v1');
+      expect(response.body).toHaveProperty('source', 'plexer');
       expect(response.body.payload).toHaveProperty('counts');
       expect(response.body.payload.counts).toHaveProperty('pending');
       expect(response.body.payload.counts).toHaveProperty('failed');

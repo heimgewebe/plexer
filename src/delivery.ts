@@ -43,7 +43,7 @@ async function ensureLockFile() {
 }
 
 // Initial startup: crash recovery and metrics scan
-(async () => {
+export async function initDelivery(): Promise<void> {
   try {
     await ensureDataDir();
     await ensureLockFile();
@@ -108,7 +108,7 @@ async function ensureLockFile() {
   } catch (err) {
     console.error('Error during startup initialization:', err);
   }
-})();
+}
 
 export async function saveFailedEvent(
   event: PlexerEvent,
