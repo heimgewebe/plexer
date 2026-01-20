@@ -2,7 +2,9 @@
 set -e
 
 # Configuration
-METAREPO_BASE_URL="https://raw.githubusercontent.com/heimgewebe/metarepo/main/contracts/plexer"
+# TODO: Update this commit SHA to a specific version tag/hash for production release
+COMMIT_SHA="main"
+METAREPO_BASE_URL="https://raw.githubusercontent.com/heimgewebe/metarepo/${COMMIT_SHA}/contracts/plexer"
 TARGET_DIR="src/vendor/schemas/plexer"
 
 mkdir -p "$TARGET_DIR"

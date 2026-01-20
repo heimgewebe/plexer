@@ -98,6 +98,7 @@ export function createServer(): Express {
       // We still return it to not break ops, but log the violation
     }
 
+    // Response follows event envelope structure
     res.json({
       type: 'plexer.delivery.report.v1',
       source: 'plexer',
@@ -113,20 +114,41 @@ export function createServer(): Express {
     ) => {
       const body = req.body;
 
+      // Basic structure check before access
+      if (!body || typeof body !== 'object') {
+         return res.status(400).json({
+          status: 'error',
+          message: 'Invalid event structure',
+        });
+      }
+
+      const { type, source, payload } = body as unknown as PlexerEvent;
+
+      if (typeof type !== 'string' || typeof source !== 'string') {
+         return res.status(400).json({
+          status: 'error',
+          message: 'Type and source must be strings',
+        });
+      }
+
+      // Normalize BEFORE schema validation
+      const normalizedType = type.trim().toLowerCase();
+      const normalizedSource = source.trim();
+
+      const normalizedEvent = {
+        type: normalizedType,
+        source: normalizedSource,
+        payload
+      };
+
       // Validate against envelope schema
-      if (!validateEventEnvelope(body)) {
+      if (!validateEventEnvelope(normalizedEvent)) {
         return res.status(400).json({
           status: 'error',
           message: 'Invalid event envelope',
           errors: validateEventEnvelope.errors,
         });
       }
-
-      const { type, source, payload } = body as unknown as PlexerEvent;
-
-      // Normalize and Strict Check
-      const normalizedType = type.trim().toLowerCase();
-      const normalizedSource = source.trim();
 
       if (
         normalizedType.length > MAX_STRING_LENGTH ||
@@ -139,7 +161,10 @@ export function createServer(): Express {
       }
 
       // Process event (logging + forwarding)
-      processEvent({ type: normalizedType, source: normalizedSource, payload });
+      // Detached execution to not block response, but tracked in pendingFetches inside processEvent
+      processEvent({ type: normalizedType, source: normalizedSource, payload }).catch(err => {
+        console.error('Error processing event:', err);
+      });
 
       res.status(202).json({ status: 'accepted' });
     },
@@ -180,7 +205,7 @@ export function createServer(): Express {
   return app;
 }
 
-export function processEvent(event: PlexerEvent): void {
+export async function processEvent(event: PlexerEvent): Promise<void> {
   const { type, source, payload } = event;
 
   let payloadPreview = String(payload);

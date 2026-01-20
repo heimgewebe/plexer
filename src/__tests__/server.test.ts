@@ -416,7 +416,7 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(400);
-      expect(response.body.message).toContain('Invalid event envelope');
+      expect(response.body.message).toContain('Type and source must be strings');
     });
 
     it('should reject missing source', async () => {
@@ -427,6 +427,7 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(400);
+      expect(response.body.message).toContain('Type and source must be strings');
     });
 
     it('should reject missing payload', async () => {

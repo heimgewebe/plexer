@@ -172,7 +172,7 @@ export async function saveFailedEvent(
       nextDueAt = failedEvent.nextAttempt;
     }
   } catch (err) {
-    console.error('Failed to acquire lock for saving event:', err);
+    console.error('[Reliability] Dropped event due to lock failure:', err);
   } finally {
     if (release) await release();
   }
@@ -330,7 +330,7 @@ export async function retryFailedEvents(): Promise<void> {
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
 
   } catch (err) {
-    console.error('Error processing failed events:', err);
+    console.error('[Reliability] Error processing failed events:', err);
   } finally {
     if (release) await release();
   }
