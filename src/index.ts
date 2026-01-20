@@ -46,7 +46,9 @@ function scheduleRetry() {
 let retryTimer: NodeJS.Timeout | null = null;
 let isShuttingDown = false;
 
-scheduleRetry();
+if (process.env.NODE_ENV !== 'test') {
+  scheduleRetry();
+}
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`Server is running on http://${config.host}:${config.port}`);
