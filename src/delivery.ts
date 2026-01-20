@@ -226,7 +226,7 @@ export async function retryFailedEvents(): Promise<void> {
       if (nextTime <= now) {
         // Try to send
         const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
-        if (!consumer) {
+        if (!consumer || !consumer.url) {
           // Backoff
           entry.retryCount++;
           // Jitter backoff
@@ -236,7 +236,7 @@ export async function retryFailedEvents(): Promise<void> {
           );
           const jitter = Math.random() * 1000;
           entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
-          entry.error = 'Consumer configuration missing';
+          entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
 
           remainingEvents.push(entry);
           continue;
