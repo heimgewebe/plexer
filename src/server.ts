@@ -124,8 +124,8 @@ export function createServer(): Express {
 
       const { type, source, payload } = body as unknown as PlexerEvent;
 
-      // Additional manual checks (trimming logic)
-      const normalizedType = type.trim();
+      // Normalize and Strict Check
+      const normalizedType = type.trim().toLowerCase();
       const normalizedSource = source.trim();
 
       if (
@@ -285,8 +285,14 @@ export function processEvent(event: PlexerEvent): void {
               type,
             };
 
-            if (BEST_EFFORT_EVENTS.has(type)) {
-              // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
+            // Reliability Policy:
+            // - Heimgeist: Critical push -> Queue on failure
+            // - Others (Chronik, Leitstand, hausKI): Best-effort notification -> Log warn on failure
+            // - BEST_EFFORT_EVENTS override: Always warn, never queue
+            const isCriticalConsumer = key === 'heimgeist';
+            const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
+
+            if (isBestEffortEvent || !isCriticalConsumer) {
               context.log_kind = 'best_effort_forward_failed';
               console.warn(`[Best-Effort] ${errorMessage}`, context);
             } else {
@@ -311,8 +317,11 @@ export function processEvent(event: PlexerEvent): void {
             error: error instanceof Error ? error.message : String(error),
           };
 
-          if (BEST_EFFORT_EVENTS.has(type)) {
-            // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
+          // Reliability Policy (same as above)
+          const isCriticalConsumer = key === 'heimgeist';
+          const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
+
+          if (isBestEffortEvent || !isCriticalConsumer) {
             context.log_kind = 'best_effort_forward_failed';
             console.warn(`[Best-Effort] ${errorMessage}`, context);
           } else {

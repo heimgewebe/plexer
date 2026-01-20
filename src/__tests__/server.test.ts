@@ -507,14 +507,21 @@ describe('Server', () => {
       }
     });
 
-    it('should accept mixed-case types due to relaxed schema pattern', async () => {
+    it('should normalize mixed-case types to lowercase', async () => {
         const payload = {
-            type: 'Test.Event_With-Mixed.Case',
+            type: 'Test.Event.Mixed.Case',
             source: 'test',
             payload: {}
         };
+
         const response = await request(app).post('/events').send(payload);
         expect(response.status).toBe(202);
+
+        // Verify forwarding was done with lowercase type
+        const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://heimgeist.local');
+        expect(callArgs).toBeDefined();
+        const sentBody = JSON.parse(callArgs![1].body);
+        expect(sentBody.type).toBe('test.event.mixed.case');
     });
 
     it('should support insights.daily.published event (notification only)', async () => {
@@ -611,16 +618,18 @@ describe('Server', () => {
       // Wait a tick for the async promise rejection handling (logging)
       await new Promise(process.nextTick);
 
-      // Verify it was logged as an error
+      // Verify Heimgeist failure was logged as an error (Critical Push)
       expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('Error forwarding event'),
-        expect.anything() // Expecting context/error as second arg
+        expect.stringContaining('Error forwarding event to Heimgeist'),
+        expect.anything()
       );
-      // And definitely not a best-effort warning
+
+      // Verify no warnings for others (since insights.daily is NOT broadcasted to others)
       expect(console.warn).not.toHaveBeenCalledWith(
         expect.stringContaining('[Best-Effort]'),
         expect.anything()
       );
+
       // Verify "Event forwarded" success log is NOT called
       expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
     });
@@ -660,38 +669,6 @@ describe('Server', () => {
         })
       );
       expect(console.error).not.toHaveBeenCalled();
-      // Verify "Event forwarded" success log is NOT called
-      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
-    });
-
-    it('should treat normal events as critical (log error on failure)', async () => {
-      // Force all consumers to fail
-      fetchMock.mockRejectedValue(new Error('Network Down'));
-
-      const payload = {
-        type: 'knowledge.observatory.published.v1',
-        source: 'semantAH',
-        payload: {
-          url: 'https://example.com/obs.json',
-        },
-      };
-
-      const response = await request(app).post('/events').send(payload);
-      expect(response.status).toBe(202);
-
-      // Wait a tick for the async promise rejection handling (logging)
-      await new Promise(process.nextTick);
-
-      // Verify it was logged as an error
-      expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('Error forwarding event'),
-        expect.anything() // Expecting context/error as second arg
-      );
-      // And definitely not a best-effort warning
-      expect(console.warn).not.toHaveBeenCalledWith(
-        expect.stringContaining('[Best-Effort]'),
-        expect.anything()
-      );
       // Verify "Event forwarded" success log is NOT called
       expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
     });

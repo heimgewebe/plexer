@@ -85,9 +85,18 @@ export async function initDelivery(): Promise<void> {
     // Ensure FAILED_LOG exists for reading
     try { await fs.access(FAILED_LOG); } catch { await fs.writeFile(FAILED_LOG, ''); }
 
-    // Read without lock as this is startup (assuming single instance)
-    // Or strictly: lock(LOCK_FILE) but we rely on single process startup.
-    const content = await fs.readFile(FAILED_LOG, 'utf8').catch(() => '');
+    let releaseScan;
+    let content = '';
+    try {
+      // Lock for read to support multi-instance / safe startup
+      releaseScan = await lock(LOCK_FILE, { retries: 3 });
+      content = await fs.readFile(FAILED_LOG, 'utf8').catch(() => '');
+    } catch (e) {
+      console.error('Failed to lock FAILED_LOG during metrics scan:', e);
+    } finally {
+      if (releaseScan) await releaseScan();
+    }
+
     const lines = content.split('\n').filter((l) => l.trim().length > 0);
     failedCount = lines.length;
     // Scan for metrics

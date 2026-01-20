@@ -17,7 +17,7 @@ Plexer tut:
 - Minimalstruktur prüfen
 - Events protokollieren
 - Events an Konsumenten weiterreichen (Fanout-Pattern)
-- Fehlgeschlagene Weiterleitungen zwischenpuffern und wiederholen (Reliability)
+- Fehlgeschlagene Weiterleitungen an **Heimgeist** zwischenpuffern und wiederholen (Reliability)
 
 Plexer tut **nicht**:
 

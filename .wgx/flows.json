@@ -1,8 +1,8 @@
 [
   {
-    "id": "plexer.delivery.report.flow",
-    "description": "Plexer periodic delivery report",
-    "schema": "src/vendor/schemas/plexer/delivery.report.v1.schema.json",
-    "pattern": "events/plexer.delivery.report.v1.*"
+    "id": "plexer.failed.event.flow",
+    "description": "Plexer persisted failed events queue",
+    "schema": "src/vendor/schemas/plexer/failed_event.v1.schema.json",
+    "pattern": "data/failed_forwards.jsonl"
   }
 ]
