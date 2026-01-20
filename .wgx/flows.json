@@ -1,0 +1,8 @@
+[
+  {
+    "id": "plexer.delivery.report.flow",
+    "description": "Plexer periodic delivery report",
+    "schema": "src/vendor/schemas/plexer/delivery.report.v1.schema.json",
+    "pattern": "events/plexer.delivery.report.v1.*"
+  }
+]

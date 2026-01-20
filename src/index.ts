@@ -1,15 +1,28 @@
-import { createServer, drainPendingRequests } from './server';
+import { createServer, drainPendingRequests, processEvent, getPendingRequestCount } from './server';
 import { config } from './config';
-import { retryFailedEvents, getNextDueAt, initDelivery } from './delivery';
+import { retryFailedEvents, getNextDueAt, initDelivery, getDeliveryMetrics } from './delivery';
 
 const app = createServer();
 const RETRY_INTERVAL_MS = 60 * 1000;
 const MIN_RETRY_DELAY_MS = 5000;
+const REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Initialize delivery system (recovery + metrics)
 initDelivery().catch((err) => {
   console.error('Failed to initialize delivery system:', err);
 });
+
+// Periodic Delivery Report Event
+setInterval(() => {
+  if (process.env.NODE_ENV !== 'test') {
+    const report = getDeliveryMetrics(getPendingRequestCount());
+    processEvent({
+      type: 'plexer.delivery.report.v1',
+      source: 'plexer',
+      payload: report
+    });
+  }
+}, REPORT_INTERVAL_MS);
 
 function scheduleRetry() {
   const nextDue = getNextDueAt();

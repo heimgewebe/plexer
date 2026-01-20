@@ -138,164 +138,8 @@ export function createServer(): Express {
         });
       }
 
-      let payloadPreview = String(payload);
-
-      if (typeof payload === 'object' && payload !== null) {
-        const payloadJson = tryJson(payload).json;
-        payloadPreview = payloadJson ?? '[Circular or invalid payload]';
-      }
-
-      if (payloadPreview.length > 100) {
-        payloadPreview = `${payloadPreview.slice(0, 100)}…`;
-      }
-
-      console.log('Received event', {
-        type: normalizedType,
-        source: normalizedSource,
-        payload: payloadPreview,
-      });
-
-      // Soft-guard for notification-only events
-      if (normalizedType === EVENT_INSIGHTS_DAILY_PUBLISHED) {
-        const payloadBytes = getPayloadSizeBytes(payload);
-        if (payloadBytes === null) {
-          console.warn(
-            `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
-          );
-        } else if (payloadBytes > 1024) {
-          console.warn(
-            `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
-          );
-        }
-      }
-
-      // Strict Pass-through: Do not inject 'eventId' or timestamp into the forwarded body.
-      // The contract requires the payload to remain untouched.
-      let serializedEvent: string;
-      try {
-        serializedEvent = JSON.stringify({
-          type: normalizedType,
-          source: normalizedSource,
-          payload,
-        });
-      } catch (error) {
-        console.error('Failed to serialize event payload for forwarding', error);
-        return res.status(400).json({
-          status: 'error',
-          message: 'Payload must be JSON-serializable',
-        });
-      }
-
-      const eventId = randomUUID();
-
-      CONSUMERS.forEach(({ key, label, url, token, authKind }) => {
-        if (!url) return;
-
-        if (!shouldForward(normalizedType, key)) {
-          return;
-        }
-
-        try {
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-          };
-          if (token) {
-            if (authKind === 'x-auth') {
-              headers['X-Auth'] = token;
-            } else {
-              headers['Authorization'] = `Bearer ${token}`;
-            }
-          }
-
-          const fetchPromise = fetch(url, {
-            method: 'POST',
-            headers,
-            body: serializedEvent,
-          })
-            .then((response) => {
-              const logData: Record<string, unknown> = {
-                event_id: eventId,
-                publisher: normalizedSource,
-                delivered_to: label,
-                statusCode: response.status,
-                auth: !!token,
-              };
-
-              if (
-                typeof payload === 'object' &&
-                payload !== null &&
-                'repo' in payload
-              ) {
-                logData.repo = (payload as Record<string, unknown>).repo;
-              }
-
-              if (response.ok) {
-                console.log('Event forwarded', logData);
-              } else {
-                let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
-                if (response.status === 401 || response.status === 403) {
-                  errorMessage += ' (token rejected)';
-                }
-
-                const context: Record<string, unknown> = {
-                  status: response.status,
-                  label,
-                  type: normalizedType,
-                };
-
-                if (BEST_EFFORT_EVENTS.has(normalizedType)) {
-                  // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
-                  context.log_kind = 'best_effort_forward_failed';
-                  console.warn(`[Best-Effort] ${errorMessage}`, context);
-                } else {
-                  saveFailedEvent(
-                    {
-                      type: normalizedType,
-                      source: normalizedSource,
-                      payload,
-                    },
-                    key,
-                    errorMessage,
-                  ).catch((e) =>
-                    console.error('Failed to save failed event', e),
-                  );
-                  console.error(errorMessage, context);
-                }
-              }
-            })
-            .catch((error) => {
-              const errorMessage = `Error forwarding event to ${label}:`;
-              const context: Record<string, unknown> = {
-                label,
-                type: normalizedType,
-                error: error instanceof Error ? error.message : String(error),
-              };
-
-              if (BEST_EFFORT_EVENTS.has(normalizedType)) {
-                // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
-                context.log_kind = 'best_effort_forward_failed';
-                console.warn(`[Best-Effort] ${errorMessage}`, context);
-              } else {
-                saveFailedEvent(
-                  {
-                    type: normalizedType,
-                    source: normalizedSource,
-                    payload,
-                  },
-                  key,
-                  error instanceof Error ? error.message : String(error),
-                ).catch((e) => console.error('Failed to save failed event', e));
-                console.error(errorMessage, context);
-              }
-            })
-            .finally(() => {
-              pendingFetches.delete(fetchPromise);
-            });
-          pendingFetches.add(fetchPromise);
-        } catch (error) {
-          console.error(`Failed to initiate forward to ${label}:`, error);
-        }
-      });
+      // Process event (logging + forwarding)
+      processEvent({ type: normalizedType, source: normalizedSource, payload });
 
       res.status(202).json({ status: 'accepted' });
     },
@@ -334,4 +178,162 @@ export function createServer(): Express {
   });
 
   return app;
+}
+
+export function processEvent(event: PlexerEvent): void {
+  const { type, source, payload } = event;
+
+  let payloadPreview = String(payload);
+
+  if (typeof payload === 'object' && payload !== null) {
+    const payloadJson = tryJson(payload).json;
+    payloadPreview = payloadJson ?? '[Circular or invalid payload]';
+  }
+
+  if (payloadPreview.length > 100) {
+    payloadPreview = `${payloadPreview.slice(0, 100)}…`;
+  }
+
+  console.log('Received event', {
+    type,
+    source,
+    payload: payloadPreview,
+  });
+
+  // Soft-guard for notification-only events
+  if (type === EVENT_INSIGHTS_DAILY_PUBLISHED) {
+    const payloadBytes = getPayloadSizeBytes(payload);
+    if (payloadBytes === null) {
+      console.warn(
+        `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
+      );
+    } else if (payloadBytes > 1024) {
+      console.warn(
+        `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
+      );
+    }
+  }
+
+  // Strict Pass-through: Do not inject 'eventId' or timestamp into the forwarded body.
+  // The contract requires the payload to remain untouched.
+  let serializedEvent: string;
+  try {
+    serializedEvent = JSON.stringify({
+      type,
+      source,
+      payload,
+    });
+  } catch (error) {
+    console.error('Failed to serialize event payload for forwarding', error);
+    return;
+  }
+
+  const eventId = randomUUID();
+
+  CONSUMERS.forEach(({ key, label, url, token, authKind }) => {
+    if (!url) return;
+
+    if (!shouldForward(type, key)) {
+      return;
+    }
+
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        if (authKind === 'x-auth') {
+          headers['X-Auth'] = token;
+        } else {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+      }
+
+      const fetchPromise = fetch(url, {
+        method: 'POST',
+        headers,
+        body: serializedEvent,
+      })
+        .then((response) => {
+          const logData: Record<string, unknown> = {
+            event_id: eventId,
+            publisher: source,
+            delivered_to: label,
+            statusCode: response.status,
+            auth: !!token,
+          };
+
+          if (
+            typeof payload === 'object' &&
+            payload !== null &&
+            'repo' in payload
+          ) {
+            logData.repo = (payload as Record<string, unknown>).repo;
+          }
+
+          if (response.ok) {
+            console.log('Event forwarded', logData);
+          } else {
+            let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
+            if (response.status === 401 || response.status === 403) {
+              errorMessage += ' (token rejected)';
+            }
+
+            const context: Record<string, unknown> = {
+              status: response.status,
+              label,
+              type,
+            };
+
+            if (BEST_EFFORT_EVENTS.has(type)) {
+              // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
+              context.log_kind = 'best_effort_forward_failed';
+              console.warn(`[Best-Effort] ${errorMessage}`, context);
+            } else {
+              saveFailedEvent(
+                {
+                  type,
+                  source,
+                  payload,
+                },
+                key,
+                errorMessage,
+              ).catch((e) => console.error('Failed to save failed event', e));
+              console.error(errorMessage, context);
+            }
+          }
+        })
+        .catch((error) => {
+          const errorMessage = `Error forwarding event to ${label}:`;
+          const context: Record<string, unknown> = {
+            label,
+            type,
+            error: error instanceof Error ? error.message : String(error),
+          };
+
+          if (BEST_EFFORT_EVENTS.has(type)) {
+            // Use 'log_kind' to avoid ambiguity with event 'kind' or 'type' in downstream logs
+            context.log_kind = 'best_effort_forward_failed';
+            console.warn(`[Best-Effort] ${errorMessage}`, context);
+          } else {
+            saveFailedEvent(
+              {
+                type,
+                source,
+                payload,
+              },
+              key,
+              error instanceof Error ? error.message : String(error),
+            ).catch((e) => console.error('Failed to save failed event', e));
+            console.error(errorMessage, context);
+          }
+        })
+        .finally(() => {
+          pendingFetches.delete(fetchPromise);
+        });
+      pendingFetches.add(fetchPromise);
+    } catch (error) {
+      console.error(`Failed to initiate forward to ${label}:`, error);
+    }
+  });
 }
