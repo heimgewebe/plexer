@@ -8,9 +8,12 @@ export const EVENT_INTEGRITY_SUMMARY_PUBLISHED_V1 =
 // Intentionally unversioned (notification-only event)
 export const EVENT_INSIGHTS_DAILY_PUBLISHED = 'insights.daily.published';
 
+export const EVENT_PLEXER_DELIVERY_REPORT_V1 = 'plexer.delivery.report.v1';
+
 export const BROADCAST_EVENTS = new Set([
   EVENT_KNOWLEDGE_OBSERVATORY_PUBLISHED_V1,
   EVENT_INTEGRITY_SUMMARY_PUBLISHED_V1,
+  EVENT_PLEXER_DELIVERY_REPORT_V1,
 ]);
 
 // Events that must NOT block routing or trigger retries/alerts.

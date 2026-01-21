@@ -31,17 +31,13 @@ vendor_schema() {
   # Validation (basic check if it's JSON)
   if ! jq . "$target" >/dev/null 2>&1; then
      echo "Error: Downloaded file $filename is not valid JSON."
-     # rm "$target" # Optional: keep for debugging
      exit 1
   fi
 }
 
-# Real download execution (commented out in dev env without external access,
-# but active for CI/Production usage)
-#
-# vendor_schema "delivery.report.v1.schema.json"
-# vendor_schema "failed_event.v1.schema.json"
-# vendor_schema "event.envelope.v1.schema.json"
+# Active download execution
+vendor_schema "delivery.report.v1.schema.json"
+vendor_schema "failed_event.v1.schema.json"
+vendor_schema "event.envelope.v1.schema.json"
 
-echo "Vendoring complete (simulated in restricted env)."
-echo "In a connected environment, uncomment the vendor_schema calls."
+echo "Vendoring complete."

@@ -160,6 +160,16 @@ export function createServer(): Express {
         });
       }
 
+      // Pre-check serialization to prevent silent drop
+      try {
+        JSON.stringify(payload);
+      } catch (error) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Payload must be JSON-serializable',
+        });
+      }
+
       // Process event (logging + forwarding)
       // Detached execution to not block response, but tracked in pendingFetches inside processEvent
       processEvent({ type: normalizedType, source: normalizedSource, payload }).catch(err => {
