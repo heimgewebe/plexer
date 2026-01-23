@@ -2,8 +2,8 @@
 set -e
 
 # Configuration
-# Tracking main for development. In production/CI, pin this to a specific SHA.
-COMMIT_SHA="main"
+# Default to main, but allow override via env var for CI pinning
+COMMIT_SHA="${COMMIT_SHA:-main}"
 METAREPO_BASE_URL="https://raw.githubusercontent.com/heimgewebe/metarepo/${COMMIT_SHA}/contracts/plexer"
 TARGET_DIR="src/vendor/schemas/plexer"
 

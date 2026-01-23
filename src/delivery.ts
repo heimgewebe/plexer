@@ -331,10 +331,13 @@ export async function retryFailedEvents(): Promise<void> {
     // Cleanup processing file
     await fs.unlink(processingFile);
 
-    // Batch write remaining events
+    // Batch write remaining events first (crash safety)
     if (remainingEvents.length > 0) {
       await batchAppendEvents(remainingEvents);
     }
+
+    // THEN cleanup processing file
+    await fs.unlink(processingFile);
 
     // Reset global metrics based on remaining events
     let minNext = Infinity;
