@@ -2,8 +2,8 @@
 set -e
 
 # Configuration
-# Pinned to specific commit. Update this SHA when syncing new contract versions.
-COMMIT_SHA="3a1b2c4d5e6f7g8h9i0j"
+# Tracking main for development. In production/CI, pin this to a specific SHA.
+COMMIT_SHA="main"
 METAREPO_BASE_URL="https://raw.githubusercontent.com/heimgewebe/metarepo/${COMMIT_SHA}/contracts/plexer"
 TARGET_DIR="src/vendor/schemas/plexer"
 

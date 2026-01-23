@@ -102,17 +102,14 @@ describe('Server', () => {
   });
 
   describe('processEvent', () => {
-    it('should process event correctly (internal logic)', () => {
+    it('should process event correctly (internal logic)', async () => {
         const event = {
             type: 'test.internal',
             source: 'test',
             payload: {}
         };
-        // Just verify it doesn't throw, mocking fetch means it will try to send
-        // We rely on fetchMock assertions in integration tests, but here we can
-        // ensure the function exists and runs.
-        expect(() => processEvent(event)).not.toThrow();
-        // Since we didn't await, we check if fetch was called async
+        // Verify it resolves successfully
+        await expect(processEvent(event)).resolves.toBeUndefined();
     });
   });
 

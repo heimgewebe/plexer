@@ -98,12 +98,21 @@ export function createServer(): Express {
       // We still return it to not break ops, but log the violation
     }
 
-    // Response follows event envelope structure
-    res.json({
+    const responseEnvelope = {
       type: 'plexer.delivery.report.v1',
       source: 'plexer',
       payload: report,
-    });
+    };
+
+    // Validate overall envelope
+    if (!validateEventEnvelope(responseEnvelope)) {
+        console.error(
+            'Delivery report envelope failed validation:',
+            validateEventEnvelope.errors,
+        );
+    }
+
+    res.json(responseEnvelope);
   });
 
   app.post(

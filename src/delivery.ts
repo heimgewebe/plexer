@@ -220,8 +220,8 @@ export async function retryFailedEvents(): Promise<void> {
     release = await lock(lockFile, { retries: 3 });
 
     // Check size/existence before rename to avoid empty file churn
-    const stats = await fs.stat(failedLog).catch(() => ({ size: 0 }));
-    if (stats.size === 0) {
+    const stats = await fs.stat(failedLog).catch(() => null);
+    if (!stats || stats.size === 0) {
       failedCount = 0;
       retryableNowCount = 0;
       nextDueAt = null;

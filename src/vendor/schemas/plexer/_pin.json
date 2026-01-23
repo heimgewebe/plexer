@@ -1,5 +1,5 @@
 {
   "source": "https://github.com/heimgewebe/metarepo",
-  "commit": "3a1b2c4d5e6f7g8h9i0j",
-  "note": "Pinned to metarepo commit. Run scripts/vendor-contracts.sh to update."
+  "commit": "main",
+  "note": "Tracking main branch. Pin to SHA for production stability."
 }
