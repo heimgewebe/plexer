@@ -86,34 +86,36 @@ export async function initDelivery(): Promise<void> {
     try { await fs.access(FAILED_LOG); } catch { await fs.writeFile(FAILED_LOG, ''); }
 
     let releaseScan;
-    let content = '';
-    try {
-      // Lock for read to support multi-instance / safe startup
-      releaseScan = await lock(LOCK_FILE, { retries: 3 });
-      content = await fs.readFile(FAILED_LOG, 'utf8').catch(() => '');
-    } catch (e) {
-      console.error('Failed to lock FAILED_LOG during metrics scan:', e);
-    } finally {
-      if (releaseScan) await releaseScan();
-    }
-
-    const lines = content.split('\n').filter((l) => l.trim().length > 0);
-    failedCount = lines.length;
-    // Scan for metrics
+    let lineCount = 0;
     let minNext = Infinity;
     const now = Date.now();
     let rNow = 0;
 
-    for (const line of lines) {
-      try {
-        const e = JSON.parse(line) as FailedEvent;
-        const n = new Date(e.nextAttempt).getTime();
-        if (!isNaN(n)) {
-          if (n < minNext) minNext = n;
-          if (n <= now) rNow++;
-        }
-      } catch {}
+    try {
+      // Lock for read to support multi-instance / safe startup
+      releaseScan = await lock(LOCK_FILE, { retries: 3 });
+
+      const fileHandle = await fs.open(FAILED_LOG, 'r');
+      for await (const line of fileHandle.readLines()) {
+        if (!line.trim()) continue;
+        lineCount++;
+        try {
+          const e = JSON.parse(line) as FailedEvent;
+          const n = new Date(e.nextAttempt).getTime();
+          if (!isNaN(n)) {
+            if (n < minNext) minNext = n;
+            if (n <= now) rNow++;
+          }
+        } catch {}
+      }
+      await fileHandle.close();
+    } catch (e) {
+      console.error('Failed to lock/read FAILED_LOG during metrics scan:', e);
+    } finally {
+      if (releaseScan) await releaseScan();
     }
+
+    failedCount = lineCount;
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
   } catch (err) {
@@ -197,14 +199,14 @@ export async function retryFailedEvents(): Promise<void> {
   try {
     // 1. Lock the lockfile
     release = await lock(LOCK_FILE, { retries: 3 });
-    const content = await fs.readFile(FAILED_LOG, 'utf8');
-    const lines = content.split('\n').filter((l) => l.trim().length > 0);
 
-    if (lines.length === 0) {
+    // Check size/existence before rename to avoid empty file churn
+    const stats = await fs.stat(FAILED_LOG).catch(() => ({ size: 0 }));
+    if (stats.size === 0) {
       failedCount = 0;
       retryableNowCount = 0;
       nextDueAt = null;
-      return; // Finally block releases lock
+      return;
     }
 
     // 2. Rename to unique processing file
@@ -218,11 +220,14 @@ export async function retryFailedEvents(): Promise<void> {
     await release();
     release = null;
 
-    // 5. Process the renamed file (processingFile)
+    // 5. Process the renamed file (processingFile) using streaming
     const remainingEvents: FailedEvent[] = [];
     const now = Date.now();
 
-    for (const line of lines) {
+    const fileHandle = await fs.open(processingFile, 'r');
+    for await (const line of fileHandle.readLines()) {
+      if (!line.trim()) continue;
+
       let entry: FailedEvent;
       try {
         entry = JSON.parse(line);
