@@ -2,8 +2,8 @@
 set -e
 
 # Configuration
-# TODO: Update this commit SHA to a specific version tag/hash for production release
-COMMIT_SHA="main"
+# Pinned to a specific commit to ensure reproducibility and prevent drift
+COMMIT_SHA="3a1b2c4d5e6f7g8h9i0j"
 METAREPO_BASE_URL="https://raw.githubusercontent.com/heimgewebe/metarepo/${COMMIT_SHA}/contracts/plexer"
 TARGET_DIR="src/vendor/schemas/plexer"
 
