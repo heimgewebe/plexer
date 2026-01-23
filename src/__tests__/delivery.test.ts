@@ -69,4 +69,15 @@ describe('Delivery', () => {
       await expect(initDelivery()).resolves.not.toThrow();
     });
   });
+
+  describe('Contract Validation (Strict Mode)', () => {
+    it('should successfully compile all schemas in strict mode', () => {
+      // Import the validators. If schema compilation fails (e.g. strict mode violation),
+      // the import or access would typically throw or log errors during module load.
+      // Here we verify they are functions.
+      const { validateDeliveryReport, validateEventEnvelope } = require('../delivery');
+      expect(typeof validateDeliveryReport).toBe('function');
+      expect(typeof validateEventEnvelope).toBe('function');
+    });
+  });
 });

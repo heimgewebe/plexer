@@ -51,6 +51,7 @@ npm is not supported.
 - `HOST` (default: 0.0.0.0)
 - `NODE_ENV` (default: development)
 - `PLEXER_DATA_DIR`: Pfad zum Verzeichnis, in dem die Queue für fehlgeschlagene Events persistiert wird (default: `./data`).
+  - **Hinweis für WGX:** Die Flow-Definition in `.wgx/flows.json` erwartet die Queue unter `data/failed_forwards.jsonl`. Wenn `PLEXER_DATA_DIR` geändert wird, muss der Flow-Pfad angepasst oder ein Symlink verwendet werden.
 
 ### Service-URLs & Authentifizierung
 
