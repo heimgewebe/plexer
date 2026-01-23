@@ -1,0 +1,12 @@
+{
+  "$id": "https://schemas.heimgewebe.org/contracts/plexer/event.envelope.v1.schema.json",
+  "title": "Event Envelope",
+  "type": "object",
+  "required": ["type", "source", "payload"],
+  "properties": {
+    "type": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9._-]+$" },
+    "source": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "payload": {}
+  },
+  "additionalProperties": false
+}

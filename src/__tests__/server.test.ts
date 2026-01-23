@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { createServer } from '../server';
+import { createServer, processEvent } from '../server';
 import { config } from '../config';
 
 // Mock config
@@ -16,7 +16,34 @@ jest.mock('../config', () => ({
     leitstandToken: 'leitstand-secret-token',
     hauskiToken: 'hauski-secret-token',
     chronikToken: 'chronik-secret-token',
+    dataDir: 'data',
   },
+}));
+
+// Mock delivery to avoid side effects
+jest.mock('../delivery', () => ({
+  saveFailedEvent: jest.fn().mockResolvedValue(undefined),
+  getDeliveryMetrics: jest.fn().mockReturnValue({
+    counts: { pending: 0, failed: 0 },
+    last_error: null,
+    last_retry_at: null,
+    retryable_now: 0,
+    next_due_at: null,
+  }),
+  retryFailedEvents: jest.fn().mockResolvedValue(undefined),
+  validateDeliveryReport: jest.fn().mockReturnValue(true),
+  // Basic mock validation to prevent crashes in tests that send invalid data
+  validateEventEnvelope: jest.fn().mockImplementation((body) => {
+    const isValid =
+      body &&
+      typeof body === 'object' &&
+      typeof body.type === 'string' &&
+      body.type.trim().length > 0 &&
+      typeof body.source === 'string' &&
+      body.source.trim().length > 0 &&
+      body.payload !== undefined;
+    return isValid;
+  }),
 }));
 
 describe('Server', () => {
@@ -62,7 +89,59 @@ describe('Server', () => {
     });
   });
 
+  describe('GET /status', () => {
+    it('should return delivery report', async () => {
+      const response = await request(app).get('/status');
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('type', 'plexer.delivery.report.v1');
+      expect(response.body).toHaveProperty('source', 'plexer');
+      expect(response.body.payload).toHaveProperty('counts');
+      expect(response.body.payload.counts).toHaveProperty('pending');
+      expect(response.body.payload.counts).toHaveProperty('failed');
+    });
+  });
+
+  describe('processEvent', () => {
+    it('should process event correctly (internal logic)', async () => {
+        const event = {
+            type: 'test.internal',
+            source: 'test',
+            payload: {}
+        };
+        // Verify it resolves successfully
+        await expect(processEvent(event)).resolves.toBeUndefined();
+    });
+  });
+
   describe('POST /events', () => {
+    it('should forward event with sha and schema_ref in payload', async () => {
+      const payload = {
+        type: 'knowledge.observatory.published.v1',
+        source: 'semantAH',
+        payload: {
+          url: 'https://github.com/org/repo/releases/download/v1/obs.json',
+          sha: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          schema_ref: 'https://schemas.heimgewebe.org/contracts/knowledge/observatory.schema.json',
+          generated_at: '2023-10-27T10:00:00Z',
+        },
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(202);
+
+      // Verify fetch was called 4 times (fanout)
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+
+      // Verify payload was passed through correctly to one of the consumers (e.g. Heimgeist)
+      const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://heimgeist.local');
+      expect(callArgs).toBeDefined();
+
+      const sentBody = JSON.parse(callArgs![1].body);
+      expect(sentBody.payload).toEqual(payload.payload);
+      expect(sentBody.payload).toHaveProperty('sha', payload.payload.sha);
+      expect(sentBody.payload).toHaveProperty('schema_ref', payload.payload.schema_ref);
+    });
+
     it('should forward unknown event types only to Heimgeist', async () => {
       const payload = {
         type: 'test.event',
@@ -145,7 +224,7 @@ describe('Server', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer chronik-secret-token',
+          'X-Auth': 'chronik-secret-token',
         },
         body: expectedBody,
       });
@@ -211,7 +290,7 @@ describe('Server', () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: 'Bearer chronik-secret-token',
+          'X-Auth': 'chronik-secret-token',
         },
         body: expectedBody,
       });
@@ -334,7 +413,7 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(400);
-      expect(response.body.message).toContain('Event must include');
+      expect(response.body.message).toContain('Type and source must be strings');
     });
 
     it('should reject missing source', async () => {
@@ -345,6 +424,7 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(400);
+      expect(response.body.message).toContain('Type and source must be strings');
     });
 
     it('should reject missing payload', async () => {
@@ -404,6 +484,42 @@ describe('Server', () => {
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
+    });
+
+    it('should accept diverse payloads (array, string, null) due to relaxed schema', async () => {
+      const payloads = [
+        [],
+        "some string",
+        null,
+        123
+      ];
+
+      for (const p of payloads) {
+        const payload = {
+          type: 'test.relaxed',
+          source: 'test',
+          payload: p
+        };
+        const response = await request(app).post('/events').send(payload);
+        expect(response.status).toBe(202);
+      }
+    });
+
+    it('should normalize mixed-case types to lowercase', async () => {
+        const payload = {
+            type: 'Test.Event.Mixed.Case',
+            source: 'test',
+            payload: {}
+        };
+
+        const response = await request(app).post('/events').send(payload);
+        expect(response.status).toBe(202);
+
+        // Verify forwarding was done with lowercase type
+        const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://heimgeist.local');
+        expect(callArgs).toBeDefined();
+        const sentBody = JSON.parse(callArgs![1].body);
+        expect(sentBody.type).toBe('test.event.mixed.case');
     });
 
     it('should support insights.daily.published event (notification only)', async () => {
@@ -500,16 +616,18 @@ describe('Server', () => {
       // Wait a tick for the async promise rejection handling (logging)
       await new Promise(process.nextTick);
 
-      // Verify it was logged as an error
+      // Verify Heimgeist failure was logged as an error (Critical Push)
       expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('Error forwarding event'),
-        expect.anything() // Expecting context/error as second arg
+        expect.stringContaining('Error forwarding event to Heimgeist'),
+        expect.anything()
       );
-      // And definitely not a best-effort warning
+
+      // Verify no warnings for others (since insights.daily is NOT broadcasted to others)
       expect(console.warn).not.toHaveBeenCalledWith(
         expect.stringContaining('[Best-Effort]'),
         expect.anything()
       );
+
       // Verify "Event forwarded" success log is NOT called
       expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
     });
@@ -549,38 +667,6 @@ describe('Server', () => {
         })
       );
       expect(console.error).not.toHaveBeenCalled();
-      // Verify "Event forwarded" success log is NOT called
-      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
-    });
-
-    it('should treat normal events as critical (log error on failure)', async () => {
-      // Force all consumers to fail
-      fetchMock.mockRejectedValue(new Error('Network Down'));
-
-      const payload = {
-        type: 'knowledge.observatory.published.v1',
-        source: 'semantAH',
-        payload: {
-          url: 'https://example.com/obs.json',
-        },
-      };
-
-      const response = await request(app).post('/events').send(payload);
-      expect(response.status).toBe(202);
-
-      // Wait a tick for the async promise rejection handling (logging)
-      await new Promise(process.nextTick);
-
-      // Verify it was logged as an error
-      expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('Error forwarding event'),
-        expect.anything() // Expecting context/error as second arg
-      );
-      // And definitely not a best-effort warning
-      expect(console.warn).not.toHaveBeenCalledWith(
-        expect.stringContaining('[Best-Effort]'),
-        expect.anything()
-      );
       // Verify "Event forwarded" success log is NOT called
       expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
     });

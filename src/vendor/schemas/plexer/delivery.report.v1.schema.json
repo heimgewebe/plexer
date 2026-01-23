@@ -1,0 +1,22 @@
+{
+  "$id": "https://schemas.heimgewebe.org/contracts/plexer/delivery.report.v1.schema.json",
+  "title": "Plexer Delivery Report",
+  "type": "object",
+  "required": ["counts"],
+  "properties": {
+    "counts": {
+      "type": "object",
+      "required": ["pending", "failed"],
+      "properties": {
+        "pending": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "last_error": { "type": ["string", "null"] },
+    "last_retry_at": { "type": ["string", "null"], "format": "date-time" },
+    "retryable_now": { "type": "integer", "minimum": 0 },
+    "next_due_at": { "type": ["string", "null"], "format": "date-time" }
+  },
+  "additionalProperties": false
+}

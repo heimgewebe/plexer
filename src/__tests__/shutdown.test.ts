@@ -9,7 +9,17 @@ jest.mock('../config', () => ({
     host: '0.0.0.0',
     environment: 'test',
     heimgeistUrl: 'http://heimgeist.local',
+    dataDir: 'data',
   },
+}));
+
+// Mock delivery to avoid side effects
+jest.mock('../delivery', () => ({
+  saveFailedEvent: jest.fn().mockResolvedValue(undefined),
+  getDeliveryMetrics: jest.fn(),
+  retryFailedEvents: jest.fn().mockResolvedValue(undefined),
+  validateEventEnvelope: jest.fn().mockReturnValue(true),
+  validateDeliveryReport: jest.fn().mockReturnValue(true),
 }));
 
 describe('Graceful Shutdown', () => {

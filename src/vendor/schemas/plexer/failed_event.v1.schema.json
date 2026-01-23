@@ -1,0 +1,30 @@
+{
+  "$id": "https://schemas.heimgewebe.org/contracts/plexer/failed_event.v1.schema.json",
+  "title": "Failed Event Entry",
+  "type": "object",
+  "required": [
+    "consumerKey",
+    "event",
+    "retryCount",
+    "lastAttempt",
+    "nextAttempt",
+    "error"
+  ],
+  "properties": {
+    "consumerKey": { "type": "string" },
+    "event": {
+      "type": "object",
+      "required": ["type", "source", "payload"],
+      "properties": {
+        "type": { "type": "string" },
+        "source": { "type": "string" },
+        "payload": {}
+      }
+    },
+    "retryCount": { "type": "integer", "minimum": 0 },
+    "lastAttempt": { "type": "string", "format": "date-time" },
+    "nextAttempt": { "type": "string", "format": "date-time" },
+    "error": { "type": "string" }
+  },
+  "additionalProperties": false
+}
