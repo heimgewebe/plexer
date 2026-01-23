@@ -20,4 +20,5 @@ export const BROADCAST_EVENTS = new Set([
 // Integrity is pull-based; events are optional hints.
 export const BEST_EFFORT_EVENTS = new Set([
   EVENT_INTEGRITY_SUMMARY_PUBLISHED_V1,
+  EVENT_PLEXER_DELIVERY_REPORT_V1,
 ]);

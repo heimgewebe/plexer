@@ -8,10 +8,6 @@ import { config } from './config';
 import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
 
-const DATA_DIR = path.resolve(config.dataDir);
-const FAILED_LOG = path.join(DATA_DIR, 'failed_forwards.jsonl');
-const LOCK_FILE = path.join(DATA_DIR, 'failed_forwards.lock');
-
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
 let failedCount = 0;
@@ -30,17 +26,29 @@ const validateFailedEvent = ajv.compile(failedEventSchema);
 export const validateDeliveryReport = ajv.compile(deliveryReportSchema);
 export const validateEventEnvelope = ajv.compile(eventEnvelopeSchema);
 
+function getDataDir() {
+  return path.resolve(config.dataDir);
+}
+
+function getFailedLogPath() {
+  return path.join(getDataDir(), 'failed_forwards.jsonl');
+}
+
+function getLockFilePath() {
+  return path.join(getDataDir(), 'failed_forwards.lock');
+}
+
 async function ensureDataDir() {
   try {
-    await fs.mkdir(DATA_DIR, { recursive: true });
+    await fs.mkdir(getDataDir(), { recursive: true });
   } catch {}
 }
 
 async function ensureLockFile() {
   try {
-    await fs.access(LOCK_FILE);
+    await fs.access(getLockFilePath());
   } catch {
-    await fs.writeFile(LOCK_FILE, '');
+    await fs.writeFile(getLockFilePath(), '');
   }
 }
 
@@ -50,8 +58,12 @@ export async function initDelivery(): Promise<void> {
     await ensureDataDir();
     await ensureLockFile();
 
+    const dataDir = getDataDir();
+    const failedLog = getFailedLogPath();
+    const lockFile = getLockFilePath();
+
     // 1. Crash Recovery: Check for orphaned processing files
-    const files = await fs.readdir(DATA_DIR);
+    const files = await fs.readdir(dataDir);
     const processingFiles = files.filter((f) => f.startsWith('processing.') && f.endsWith('.jsonl'));
 
     if (processingFiles.length > 0) {
@@ -59,16 +71,16 @@ export async function initDelivery(): Promise<void> {
 
       let release;
       try {
-        release = await lock(LOCK_FILE, { retries: 3 });
+        release = await lock(lockFile, { retries: 3 });
         // Ensure FAILED_LOG exists
-        try { await fs.access(FAILED_LOG); } catch { await fs.writeFile(FAILED_LOG, ''); }
+        try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
 
         for (const file of processingFiles) {
-          const filePath = path.join(DATA_DIR, file);
+          const filePath = path.join(dataDir, file);
           try {
             const content = await fs.readFile(filePath, 'utf8');
             // Append content directly
-            await fs.appendFile(FAILED_LOG, content);
+            await fs.appendFile(failedLog, content);
             await fs.unlink(filePath);
           } catch (e) {
             console.error(`Failed to recover orphaned file ${file}:`, e);
@@ -83,7 +95,7 @@ export async function initDelivery(): Promise<void> {
 
     // 2. Metrics Scan
     // Ensure FAILED_LOG exists for reading
-    try { await fs.access(FAILED_LOG); } catch { await fs.writeFile(FAILED_LOG, ''); }
+    try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
 
     let releaseScan;
     let lineCount = 0;
@@ -93,9 +105,9 @@ export async function initDelivery(): Promise<void> {
 
     try {
       // Lock for read to support multi-instance / safe startup
-      releaseScan = await lock(LOCK_FILE, { retries: 3 });
+      releaseScan = await lock(lockFile, { retries: 3 });
 
-      const fileHandle = await fs.open(FAILED_LOG, 'r');
+      const fileHandle = await fs.open(failedLog, 'r');
       for await (const line of fileHandle.readLines()) {
         if (!line.trim()) continue;
         lineCount++;
@@ -131,6 +143,9 @@ export async function saveFailedEvent(
   await ensureDataDir();
   await ensureLockFile();
 
+  const failedLog = getFailedLogPath();
+  const lockFile = getLockFilePath();
+
   const failedEvent: FailedEvent = {
     consumerKey,
     event,
@@ -157,15 +172,15 @@ export async function saveFailedEvent(
 
   // Ensure file exists for appending
   try {
-    await fs.access(FAILED_LOG);
+    await fs.access(failedLog);
   } catch {
-    await fs.writeFile(FAILED_LOG, '');
+    await fs.writeFile(failedLog, '');
   }
 
   let release;
   try {
-    release = await lock(LOCK_FILE, { retries: 3 });
-    await fs.appendFile(FAILED_LOG, line, 'utf8');
+    release = await lock(lockFile, { retries: 3 });
+    await fs.appendFile(failedLog, line, 'utf8');
     failedCount++;
     lastError = error;
     // Update nextDueAt if this is sooner
@@ -185,11 +200,15 @@ export async function retryFailedEvents(): Promise<void> {
   await ensureDataDir();
   await ensureLockFile();
 
+  const dataDir = getDataDir();
+  const failedLog = getFailedLogPath();
+  const lockFile = getLockFilePath();
+
   // Ensure file exists
   try {
-    await fs.access(FAILED_LOG);
+    await fs.access(failedLog);
   } catch {
-    await fs.writeFile(FAILED_LOG, '');
+    await fs.writeFile(failedLog, '');
     return;
   }
 
@@ -198,10 +217,10 @@ export async function retryFailedEvents(): Promise<void> {
 
   try {
     // 1. Lock the lockfile
-    release = await lock(LOCK_FILE, { retries: 3 });
+    release = await lock(lockFile, { retries: 3 });
 
     // Check size/existence before rename to avoid empty file churn
-    const stats = await fs.stat(FAILED_LOG).catch(() => ({ size: 0 }));
+    const stats = await fs.stat(failedLog).catch(() => ({ size: 0 }));
     if (stats.size === 0) {
       failedCount = 0;
       retryableNowCount = 0;
@@ -210,11 +229,11 @@ export async function retryFailedEvents(): Promise<void> {
     }
 
     // 2. Rename to unique processing file
-    processingFile = path.join(DATA_DIR, `processing.${randomUUID()}.jsonl`);
-    await fs.rename(FAILED_LOG, processingFile);
+    processingFile = path.join(dataDir, `processing.${randomUUID()}.jsonl`);
+    await fs.rename(failedLog, processingFile);
 
     // 3. Create new empty FAILED_LOG so saveFailedEvent can continue working
-    await fs.writeFile(FAILED_LOG, '');
+    await fs.writeFile(failedLog, '');
 
     // 4. Release lock immediately to allow new events to be saved
     await release();
@@ -345,8 +364,8 @@ async function batchAppendEvents(entries: FailedEvent[]) {
     const lines = entries.map(e => JSON.stringify(e)).join('\n') + '\n';
     let release;
     try {
-        release = await lock(LOCK_FILE, { retries: 3 });
-        await fs.appendFile(FAILED_LOG, lines, 'utf8');
+        release = await lock(getLockFilePath(), { retries: 3 });
+        await fs.appendFile(getFailedLogPath(), lines, 'utf8');
     } catch(e) {
         console.error('Failed to batch requeue events', e);
     } finally {
