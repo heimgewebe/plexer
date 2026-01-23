@@ -6,6 +6,7 @@ import {
   BROADCAST_EVENTS,
   EVENT_INSIGHTS_DAILY_PUBLISHED,
   BEST_EFFORT_EVENTS,
+  EVENT_PLEXER_DELIVERY_REPORT_V1,
 } from './constants';
 import { CONSUMERS } from './consumers';
 import {
@@ -99,7 +100,7 @@ export function createServer(): Express {
     }
 
     const responseEnvelope = {
-      type: 'plexer.delivery.report.v1',
+      type: EVENT_PLEXER_DELIVERY_REPORT_V1,
       source: 'plexer',
       payload: report,
     };

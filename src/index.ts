@@ -1,6 +1,7 @@
 import { createServer, drainPendingRequests, processEvent, getPendingRequestCount } from './server';
 import { config } from './config';
 import { retryFailedEvents, getNextDueAt, initDelivery, getDeliveryMetrics } from './delivery';
+import { EVENT_PLEXER_DELIVERY_REPORT_V1 } from './constants';
 
 const app = createServer();
 const RETRY_INTERVAL_MS = 60 * 1000;
@@ -16,10 +17,12 @@ initDelivery().catch((err) => {
 setInterval(() => {
   if (process.env.NODE_ENV !== 'test') {
     const report = getDeliveryMetrics(getPendingRequestCount());
-    processEvent({
-      type: 'plexer.delivery.report.v1',
+    void processEvent({
+      type: EVENT_PLEXER_DELIVERY_REPORT_V1,
       source: 'plexer',
-      payload: report
+      payload: report,
+    }).catch((err) => {
+      console.error('Failed to process periodic delivery report event:', err);
     });
   }
 }, REPORT_INTERVAL_MS);

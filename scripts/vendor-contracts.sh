@@ -11,6 +11,15 @@ mkdir -p "$TARGET_DIR"
 
 echo "Vendoring contracts from metarepo..."
 
+validate_json() {
+  local target="$1"
+  if command -v jq >/dev/null 2>&1; then
+    jq . "$target" >/dev/null 2>&1
+  else
+    node -e "JSON.parse(require('fs').readFileSync('$target','utf8'))" >/dev/null 2>&1
+  fi
+}
+
 # Function to download a schema
 vendor_schema() {
   local filename=$1
@@ -29,7 +38,7 @@ vendor_schema() {
   fi
 
   # Validation (basic check if it's JSON)
-  if ! jq . "$target" >/dev/null 2>&1; then
+  if ! validate_json "$target"; then
      echo "Error: Downloaded file $filename is not valid JSON."
      exit 1
   fi
