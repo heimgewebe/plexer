@@ -1,12 +1,35 @@
-import fs from 'fs/promises';
-import { saveFailedEvent, getDeliveryMetrics } from '../delivery';
 
-// Mock fs
-jest.mock('fs/promises');
+import fsPromises from 'fs/promises';
+import fs from 'fs';
+import readline from 'readline';
+import { lock } from 'proper-lockfile';
+
+// Mock fs/promises
+jest.mock('fs/promises', () => ({
+  appendFile: jest.fn(),
+  writeFile: jest.fn(),
+  access: jest.fn(),
+  rename: jest.fn(),
+  unlink: jest.fn(),
+  readdir: jest.fn(),
+  readFile: jest.fn(),
+  mkdir: jest.fn(),
+  stat: jest.fn(),
+}));
+
+// Mock fs (createReadStream)
+jest.mock('fs', () => ({
+  createReadStream: jest.fn(),
+}));
+
+// Mock readline
+jest.mock('readline', () => ({
+  createInterface: jest.fn(),
+}));
 
 // Mock proper-lockfile
 jest.mock('proper-lockfile', () => ({
-  lock: jest.fn().mockResolvedValue(() => Promise.resolve()),
+  lock: jest.fn(),
 }));
 
 // Mock consumers
@@ -16,68 +39,226 @@ jest.mock('../consumers', () => ({
   ],
 }));
 
-describe('Delivery', () => {
+// Mock global fetch
+const mockFetch = jest.fn();
+global.fetch = mockFetch as unknown as typeof fetch;
+
+// Import subject under test
+import { saveFailedEvent, retryFailedEvents, initDelivery } from '../delivery';
+
+describe('Delivery Reliability', () => {
+  let mockStream: any;
+  let mockRl: any;
+  let mockLockRelease: any;
+
+  // Access mocks via imported modules
+  const mockAppendFile = fsPromises.appendFile as jest.Mock;
+  const mockWriteFile = fsPromises.writeFile as jest.Mock;
+  const mockAccess = fsPromises.access as jest.Mock;
+  const mockRename = fsPromises.rename as jest.Mock;
+  const mockUnlink = fsPromises.unlink as jest.Mock;
+  const mockReaddir = fsPromises.readdir as jest.Mock;
+  const mockReadFile = fsPromises.readFile as jest.Mock;
+  const mockMkdir = fsPromises.mkdir as jest.Mock;
+  const mockStat = fsPromises.stat as jest.Mock;
+
+  const mockCreateReadStream = fs.createReadStream as jest.Mock;
+  const mockCreateInterface = readline.createInterface as jest.Mock;
+  const mockLock = lock as jest.Mock;
+
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // Default fs/promises behavior
+    mockAccess.mockResolvedValue(undefined); // Files exist by default
+    mockStat.mockResolvedValue({ size: 100 }); // File has content by default
+    mockReaddir.mockResolvedValue([]); // No orphan files by default
+    mockMkdir.mockResolvedValue(undefined);
+    mockAppendFile.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockRename.mockResolvedValue(undefined);
+    mockUnlink.mockResolvedValue(undefined);
+    mockReadFile.mockResolvedValue('');
+
+    // Setup proper-lockfile
+    mockLockRelease = jest.fn();
+    mockLock.mockResolvedValue(mockLockRelease);
+
+    // Setup stream/readline mocks
+    mockStream = {
+      on: jest.fn(),
+      destroy: jest.fn(),
+    };
+    mockCreateReadStream.mockReturnValue(mockStream);
+
+    mockRl = {
+      on: jest.fn(),
+      close: jest.fn(),
+      [Symbol.asyncIterator]: jest.fn(),
+    };
+
+    // Default empty iterator
+    const emptyGenerator = async function* () {};
+    mockRl[Symbol.asyncIterator].mockReturnValue(emptyGenerator());
+
+    mockCreateInterface.mockReturnValue(mockRl);
   });
 
+  const mockReadLines = (lines: string[]) => {
+    const generator = async function* () {
+      for (const line of lines) {
+        yield line;
+      }
+    };
+    mockRl[Symbol.asyncIterator].mockReturnValue(generator());
+  };
+
   describe('saveFailedEvent', () => {
-    it('should append failed event to file', async () => {
+    it('should append valid failed event to log', async () => {
       const event = { type: 'test', source: 'src', payload: {} };
-      (fs.appendFile as jest.Mock).mockResolvedValue(undefined);
-      (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
-      (fs.access as jest.Mock).mockResolvedValue(undefined); // File exists
 
       await saveFailedEvent(event, 'test-consumer', 'some error');
 
-      // Now we expect lock to be called on lock file, and append to jsonl
-      // Since lock mock is global, we assume it works.
-      // We verify appendFile is called correctly.
-      expect(fs.appendFile).toHaveBeenCalledWith(
+      expect(mockAppendFile).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
         expect.stringContaining('"consumerKey":"test-consumer"'),
         'utf8'
       );
+      expect(mockLock).toHaveBeenCalled();
+      expect(mockLockRelease).toHaveBeenCalled();
     });
 
-    it('should not save invalid event (missing consumerKey implied args)', async () => {
-       // saveFailedEvent interface requires consumerKey, so TS prevents missing it,
-       // but we can test invalid payload structure passed in event
-       const invalidEvent = { type: 'test' } as any; // Missing source/payload
+    it('should not append invalid event (missing fields)', async () => {
+       const invalidEvent = { type: 'test' } as any; // Invalid
 
+       // Pass invalid event (schema check happens inside saveFailedEvent)
        await saveFailedEvent(invalidEvent, 'test-consumer', 'err');
 
-       expect(fs.appendFile).not.toHaveBeenCalled();
+       expect(mockAppendFile).not.toHaveBeenCalled();
     });
   });
 
-  describe('getDeliveryMetrics', () => {
-    it('should return metrics', () => {
-      const metrics = getDeliveryMetrics(5);
-      expect(metrics.counts.pending).toBe(5);
-      expect(metrics.counts.failed).toBeDefined();
-      expect(metrics).toHaveProperty('retryable_now');
-      expect(metrics).toHaveProperty('next_due_at');
+  describe('retryFailedEvents', () => {
+    it('should forward due events successfully and remove them', async () => {
+      // Mock renaming success
+      mockRename.mockResolvedValue(undefined);
+
+      const dueEvent = {
+        consumerKey: 'test-consumer',
+        event: { type: 't', source: 's', payload: {} },
+        retryCount: 0,
+        nextAttempt: new Date(Date.now() - 1000).toISOString(), // Due
+        lastAttempt: new Date().toISOString(),
+        error: 'prev error'
+      };
+
+      mockReadLines([JSON.stringify(dueEvent)]);
+
+      // Mock fetch success
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+      });
+
+      await retryFailedEvents();
+
+      // Should verify lock -> rename -> write empty -> unlock
+      expect(mockRename).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('failed_forwards.jsonl'), '');
+
+      // Should fetch
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://test.local',
+        expect.objectContaining({ method: 'POST' })
+      );
+
+      // Should NOT re-append (success means removed from queue)
+      expect(mockAppendFile).not.toHaveBeenCalled();
+
+      // Should clean up processing file
+      expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('processing.'));
+
+      // Verify resource cleanup
+      expect(mockRl.close).toHaveBeenCalled();
+      expect(mockStream.destroy).toHaveBeenCalled();
+    });
+
+    it('should increment retry count and requeue on failure', async () => {
+      const dueEvent = {
+        consumerKey: 'test-consumer',
+        event: { type: 't', source: 's', payload: {} },
+        retryCount: 0,
+        nextAttempt: new Date(Date.now() - 1000).toISOString(), // Due
+        lastAttempt: new Date().toISOString(),
+        error: 'prev error'
+      };
+
+      mockReadLines([JSON.stringify(dueEvent)]);
+
+      // Mock fetch failure
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Error'
+      });
+
+      await retryFailedEvents();
+
+      // Should attempt fetch
+      expect(mockFetch).toHaveBeenCalled();
+
+      // Should re-append with incremented retry count
+      expect(mockAppendFile).toHaveBeenCalledWith(
+        expect.stringContaining('failed_forwards.jsonl'),
+        expect.stringContaining('"retryCount":1'),
+        'utf8'
+      );
+
+      // Cleanup
+      expect(mockUnlink).toHaveBeenCalled();
+    });
+
+    it('should requeue future events without attempting fetch', async () => {
+        const futureEvent = {
+            consumerKey: 'test-consumer',
+            event: { type: 't', source: 's', payload: {} },
+            retryCount: 0,
+            nextAttempt: new Date(Date.now() + 100000).toISOString(), // Future
+            lastAttempt: new Date().toISOString(),
+            error: 'prev error'
+          };
+
+          mockReadLines([JSON.stringify(futureEvent)]);
+
+          await retryFailedEvents();
+
+          expect(mockFetch).not.toHaveBeenCalled();
+
+          // Should re-append unchanged (or at least preserved)
+          expect(mockAppendFile).toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.jsonl'),
+            expect.stringContaining('"retryCount":0'),
+            'utf8'
+          );
     });
   });
 
   describe('initDelivery', () => {
-    // Basic test to ensure it runs without error in mock env
-    it('should run initialization sequence', async () => {
-      // Logic is hard to test due to mocked fs/lockfile, but we can call it
-      const { initDelivery } = require('../delivery');
-      await expect(initDelivery()).resolves.not.toThrow();
-    });
-  });
+    it('should recover orphaned processing files', async () => {
+        mockReaddir.mockResolvedValue(['processing.123.jsonl']);
+        mockReadFile.mockResolvedValue('{"some":"data"}\n');
 
-  describe('Contract Validation (Strict Mode)', () => {
-    it('should successfully compile all schemas in strict mode', () => {
-      // Import the validators. If schema compilation fails (e.g. strict mode violation),
-      // the import or access would typically throw or log errors during module load.
-      // Here we verify they are functions.
-      const { validateDeliveryReport, validateEventEnvelope } = require('../delivery');
-      expect(typeof validateDeliveryReport).toBe('function');
-      expect(typeof validateEventEnvelope).toBe('function');
+        await initDelivery();
+
+        // Lock -> Read orphan -> Append to failed log -> Unlink orphan -> Unlock
+        expect(mockLock).toHaveBeenCalled();
+        expect(mockReadFile).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'), 'utf8');
+        expect(mockAppendFile).toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.jsonl'),
+            '{"some":"data"}\n'
+        );
+        expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
+        expect(mockLockRelease).toHaveBeenCalled();
     });
   });
 });

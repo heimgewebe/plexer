@@ -288,7 +288,13 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
       if (token) {
         if (authKind === 'x-auth') {
           headers['X-Auth'] = token;
-        } else if (authKind === 'bearer') {
+        } else {
+          // Default to Bearer, but warn if unknown
+          if (authKind !== 'bearer') {
+            console.warn(
+              `Unknown authKind "${authKind}" for consumer ${key}; defaulting to Bearer`,
+            );
+          }
           headers['Authorization'] = `Bearer ${token}`;
         }
       }
