@@ -1,4 +1,6 @@
 import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import readline from 'readline';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import Ajv from 'ajv';
@@ -25,6 +27,32 @@ import eventEnvelopeSchema from './vendor/schemas/plexer/event.envelope.v1.schem
 const validateFailedEvent = ajv.compile(failedEventSchema);
 export const validateDeliveryReport = ajv.compile(deliveryReportSchema);
 export const validateEventEnvelope = ajv.compile(eventEnvelopeSchema);
+
+async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
+  const stream = createReadStream(filePath);
+  const rl = readline.createInterface({
+    input: stream,
+    crlfDelay: Infinity,
+  });
+
+  const errorPromise = new Promise<never>((_, reject) => {
+    stream.on('error', reject);
+    rl.on('error', reject);
+  });
+
+  const iterator = rl[Symbol.asyncIterator]();
+
+  try {
+    while (true) {
+      const result = await Promise.race([iterator.next(), errorPromise]);
+      if (result.done) return;
+      yield result.value;
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+}
 
 function getDataDir() {
   return path.resolve(config.dataDir);
@@ -107,8 +135,7 @@ export async function initDelivery(): Promise<void> {
       // Lock for read to support multi-instance / safe startup
       releaseScan = await lock(lockFile, { retries: 3 });
 
-      const fileHandle = await fs.open(failedLog, 'r');
-      for await (const line of fileHandle.readLines()) {
+      for await (const line of readLinesSafe(failedLog)) {
         if (!line.trim()) continue;
         lineCount++;
         try {
@@ -120,7 +147,6 @@ export async function initDelivery(): Promise<void> {
           }
         } catch {}
       }
-      await fileHandle.close();
     } catch (e) {
       console.error('Failed to lock/read FAILED_LOG during metrics scan:', e);
     } finally {
@@ -243,8 +269,7 @@ export async function retryFailedEvents(): Promise<void> {
     const remainingEvents: FailedEvent[] = [];
     const now = Date.now();
 
-    const fileHandle = await fs.open(processingFile, 'r');
-    for await (const line of fileHandle.readLines()) {
+    for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
 
       let entry: FailedEvent;
@@ -327,9 +352,6 @@ export async function retryFailedEvents(): Promise<void> {
         remainingEvents.push(entry);
       }
     }
-
-    // Cleanup processing file
-    await fs.unlink(processingFile);
 
     // Batch write remaining events first (crash safety)
     if (remainingEvents.length > 0) {
