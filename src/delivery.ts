@@ -310,11 +310,11 @@ export async function retryFailedEvents(): Promise<void> {
         }
 
         try {
-          let headers: Record<string, string> = {
+          const headers: Record<string, string> = {
             'Content-Type': 'application/json',
           };
           if (consumer.token) {
-            headers = getAuthHeaders(consumer.authKind, consumer.token, consumer.key);
+            Object.assign(headers, getAuthHeaders(consumer.authKind, consumer.token, consumer.key));
           }
 
           const res = await fetch(consumer.url!, {

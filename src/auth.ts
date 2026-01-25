@@ -4,9 +4,7 @@ export function getAuthHeaders(
   token: string,
   consumerKey: string
 ): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
+  const headers: Record<string, string> = {};
 
   if (authKind === 'x-auth') {
     headers['X-Auth'] = token;

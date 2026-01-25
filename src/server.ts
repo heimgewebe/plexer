@@ -283,11 +283,11 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
     }
 
     try {
-      let headers: Record<string, string> = {
+      const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
       if (token) {
-        headers = getAuthHeaders(authKind, token, key);
+        Object.assign(headers, getAuthHeaders(authKind, token, key));
       }
 
       const fetchPromise = fetch(url, {
