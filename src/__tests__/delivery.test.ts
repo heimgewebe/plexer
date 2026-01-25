@@ -256,8 +256,9 @@ describe('Delivery Reliability', () => {
 
         // Ensure generator allows the error to propagate
         mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {
-            // Yield nothing, wait long enough for the error to win the race, but not forever (prevent CI hang)
-            await new Promise(r => setTimeout(r, 5000));
+            // Yield nothing; keep pending so the error event (via Promise.race) always wins.
+            // Use a short timeout (50ms) to ensure we don't hang CI if the error fails to trigger.
+            await new Promise(r => setTimeout(r, 50));
         })());
 
         const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
