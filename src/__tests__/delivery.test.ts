@@ -1,8 +1,19 @@
 import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import readline from 'readline';
 import { saveFailedEvent, getDeliveryMetrics, retryFailedEvents, initDelivery } from '../delivery';
 
-// Mock fs
+// Mock fs/promises
 jest.mock('fs/promises');
+
+// Mock fs (non-promise) for createReadStream
+jest.mock('fs', () => ({
+  createReadStream: jest.fn(),
+  promises: jest.requireActual('fs/promises'), // Keep promises accessible if needed via default import
+}));
+
+// Mock readline
+jest.mock('readline');
 
 // Mock proper-lockfile
 jest.mock('proper-lockfile', () => ({
@@ -48,6 +59,28 @@ describe('Delivery', () => {
     });
   });
 
+  // Helper to mock readLinesSafe behavior via createReadStream + readline
+  const mockReadLines = (lines: string[]) => {
+    const mockStream = {
+      on: jest.fn(),
+      destroy: jest.fn(),
+    };
+    (createReadStream as jest.Mock).mockReturnValue(mockStream);
+
+    const mockRl = {
+      [Symbol.asyncIterator]: jest.fn().mockReturnValue((async function* () {
+        for (const line of lines) {
+          yield line;
+        }
+      })()),
+      on: jest.fn(),
+      close: jest.fn(),
+    };
+    (readline.createInterface as jest.Mock).mockReturnValue(mockRl);
+
+    return { mockStream, mockRl };
+  };
+
   describe('retryFailedEvents', () => {
     it('should process due events and remove them on success', async () => {
       const now = Date.now();
@@ -65,47 +98,26 @@ describe('Delivery', () => {
         nextAttempt: new Date(now + 100000).toISOString()
       };
 
-      // Mock fs.stat to simulate file exists
       (fs.stat as jest.Mock).mockResolvedValue({ size: 100 });
       (fs.access as jest.Mock).mockResolvedValue(undefined);
       (fs.rename as jest.Mock).mockResolvedValue(undefined);
       (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
       (fs.unlink as jest.Mock).mockResolvedValue(undefined);
 
-      // Mock fs.open and readLines
-      const mockFileHandle = {
-        readLines: jest.fn().mockReturnValue((async function* () {
-          yield JSON.stringify(dueEvent);
-          yield JSON.stringify(futureEvent);
-        })()),
-        close: jest.fn().mockResolvedValue(undefined)
-      };
-      (fs.open as jest.Mock).mockResolvedValue(mockFileHandle);
+      mockReadLines([JSON.stringify(dueEvent), JSON.stringify(futureEvent)]);
 
-      // Mock fetch success
       mockFetch.mockResolvedValue({ ok: true, status: 200 });
 
       await retryFailedEvents();
 
-      // Should have tried to fetch dueEvent
       expect(mockFetch).toHaveBeenCalledTimes(1);
 
-      // Should have requeued futureEvent but NOT dueEvent
-      // We expect one append call for the remaining (future) events
-      // Note: Implementation calls batchAppendEvents, which calls appendFile
       expect(fs.appendFile).toHaveBeenCalled();
       const appendCalls = (fs.appendFile as jest.Mock).mock.calls;
-      // Filter for the call to failed_forwards.jsonl
       const dataAppend = appendCalls.find(call => call[0].includes('failed_forwards.jsonl') && call[1]);
       expect(dataAppend).toBeDefined();
       expect(dataAppend[1]).toContain(futureEvent.nextAttempt);
-      // Should NOT contain the dueEvent (as it was successful) (checking via nextAttempt or unique prop)
-      // Since dueEvent and futureEvent are identical except nextAttempt, checking existence of future's nextAttempt is key.
 
-      // Ensure file handle was closed
-      expect(mockFileHandle.close).toHaveBeenCalled();
-
-      // Ensure processing file was unlinked
       expect(fs.unlink).toHaveBeenCalledWith(expect.stringContaining('processing.'));
     });
 
@@ -120,29 +132,20 @@ describe('Delivery', () => {
         error: 'prev error'
       };
 
-      // Mock fs
       (fs.stat as jest.Mock).mockResolvedValue({ size: 100 });
       (fs.access as jest.Mock).mockResolvedValue(undefined);
       (fs.rename as jest.Mock).mockResolvedValue(undefined);
       (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
       (fs.unlink as jest.Mock).mockResolvedValue(undefined);
 
-      const mockFileHandle = {
-        readLines: jest.fn().mockReturnValue((async function* () {
-          yield JSON.stringify(dueEvent);
-        })()),
-        close: jest.fn().mockResolvedValue(undefined)
-      };
-      (fs.open as jest.Mock).mockResolvedValue(mockFileHandle);
+      mockReadLines([JSON.stringify(dueEvent)]);
 
-      // Mock fetch failure
       mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Internal Error' });
 
       await retryFailedEvents();
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
 
-      // Should have requeued dueEvent with updated backoff
       const appendCalls = (fs.appendFile as jest.Mock).mock.calls;
       const dataAppend = appendCalls.find(call => call[0].includes('failed_forwards.jsonl') && call[1]);
 
@@ -161,22 +164,22 @@ describe('Delivery', () => {
       (fs.readFile as jest.Mock).mockResolvedValue('{"some":"content"}\n');
       (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
       (fs.access as jest.Mock).mockResolvedValue(undefined);
-      // Mock metrics scan part failure (or success, but we focus on recovery here)
-      // We'll mock open to fail to stop the metrics scan part from doing much
-      (fs.open as jest.Mock).mockRejectedValue(new Error('Stop metrics scan'));
+
+      // We also mock the readLinesSafe call inside metrics scan to do nothing or throw
+      // But initDelivery catches errors.
+      // For this test, we care about recovery logic which happens BEFORE metrics scan.
+      // We can make metrics scan fail or empty.
+      mockReadLines([]); // Empty
 
       await initDelivery();
 
-      // Should read orphaned file
       expect(fs.readFile).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'), 'utf8');
 
-      // Should append content to failed log
       expect(fs.appendFile).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
         expect.anything()
       );
 
-      // Should unlink orphaned file
       expect(fs.unlink).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
     });
   });

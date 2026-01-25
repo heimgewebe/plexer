@@ -289,7 +289,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
       if (token) {
         if (authKind === 'x-auth') {
           headers['X-Auth'] = token;
-        } else if (authKind === 'bearer') {
+        } else {
           headers['Authorization'] = `Bearer ${token}`;
         }
       }
