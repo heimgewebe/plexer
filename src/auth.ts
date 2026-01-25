@@ -1,4 +1,11 @@
 
+/**
+ * Returns strictly authentication headers (X-Auth or Authorization).
+ *
+ * Contract:
+ * - Only returns auth headers.
+ * - Caller is responsible for setting `Content-Type` and other headers.
+ */
 export function getAuthHeaders(
   authKind: string,
   token: string,

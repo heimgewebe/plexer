@@ -72,6 +72,8 @@ Plexer wendet automatisch den korrekten Auth-Header je nach Zielsystem an.
 Plexer nutzt eine persistente, dateibasierte Queue (`failed_forwards.jsonl`), um Events auch bei temporären Ausfällen der Konsumenten zuzustellen. Die Verarbeitung erfolgt thread-safe über `proper-lockfile` (Locking auf `failed_forwards.lock`), sodass mehrere Prozesse oder Neustarts keine Datenkorruption verursachen.
 
 ### Critical Consumer vs. Best-Effort
+Current policy: only Heimgeist is critical; others are best-effort by design, may evolve.
+
 Die Unterscheidung erfolgt primär anhand des Konsumenten und sekundär per Event-Override:
 
 1. **Heimgeist (Critical Consumer)**:
