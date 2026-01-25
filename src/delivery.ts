@@ -9,6 +9,7 @@ import { lock } from 'proper-lockfile';
 import { config } from './config';
 import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
+import { getAuthHeaders } from './auth';
 
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
@@ -177,9 +178,9 @@ export async function saveFailedEvent(
     event,
     retryCount: 0,
     lastAttempt: new Date().toISOString(),
-    // Initial: 30s + jitter
+    // Initial: 30s + 0-10s jitter (consistent with other retry logic)
     nextAttempt: new Date(
-      Date.now() + 30000 + Math.random() * 5000,
+      Date.now() + 30000 + Math.random() * 10000,
     ).toISOString(),
     error,
   };
@@ -269,6 +270,10 @@ export async function retryFailedEvents(): Promise<void> {
     const remainingEvents: FailedEvent[] = [];
     const now = Date.now();
 
+    if (!processingFile) {
+        throw new Error('[Reliability] Processing file not defined despite lock acquisition');
+    }
+
     for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
 
@@ -292,9 +297,13 @@ export async function retryFailedEvents(): Promise<void> {
             Math.pow(2, entry.retryCount) * 60 * 1000,
             24 * 60 * 60 * 1000,
           );
-          const jitter = Math.random() * 1000;
+          // Consistent 10s jitter
+          const jitter = Math.random() * 10000;
           entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
           entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
+
+          // Metrics fallback
+          entry.lastAttempt = new Date().toISOString();
 
           remainingEvents.push(entry);
           continue;
@@ -305,11 +314,7 @@ export async function retryFailedEvents(): Promise<void> {
             'Content-Type': 'application/json',
           };
           if (consumer.token) {
-            if (consumer.authKind === 'x-auth') {
-                headers['X-Auth'] = consumer.token;
-            } else if (consumer.authKind === 'bearer') {
-                headers['Authorization'] = `Bearer ${consumer.token}`;
-            }
+            Object.assign(headers, getAuthHeaders(consumer.authKind, consumer.token, consumer.key));
           }
 
           const res = await fetch(consumer.url!, {
@@ -336,7 +341,8 @@ export async function retryFailedEvents(): Promise<void> {
             Math.pow(2, entry.retryCount) * 60 * 1000,
             24 * 60 * 60 * 1000,
           );
-          const jitter = Math.random() * 10000; // up to 10s jitter
+          // Consistent 10s jitter
+          const jitter = Math.random() * 10000;
           entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
           entry.error = err instanceof Error ? err.message : String(err);
           lastError = entry.error;
@@ -380,6 +386,9 @@ export async function retryFailedEvents(): Promise<void> {
 
   } catch (err) {
     console.error('[Reliability] Error processing failed events:', err);
+    // IMPORTANT: If we crash here (e.g. during batchAppendEvents),
+    // we DO NOT unlink processingFile.
+    // initDelivery will pick it up next time.
   } finally {
     if (release) await release();
   }
@@ -392,7 +401,8 @@ async function batchAppendEvents(entries: FailedEvent[]) {
         release = await lock(getLockFilePath(), { retries: 3 });
         await fs.appendFile(getFailedLogPath(), lines, 'utf8');
     } catch(e) {
-        console.error('Failed to batch requeue events', e);
+        // Re-throw to prevent processing file deletion
+        throw e;
     } finally {
         if(release) await release();
     }

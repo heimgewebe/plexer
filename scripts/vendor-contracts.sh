@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # Configuration
 # Default to main, but allow override via env var for CI pinning
@@ -10,6 +10,18 @@ TARGET_DIR="src/vendor/schemas/plexer"
 mkdir -p "$TARGET_DIR"
 
 echo "Vendoring contracts from metarepo..."
+
+validate_json() {
+  local file=$1
+  if command -v jq >/dev/null 2>&1; then
+    jq . "$file" >/dev/null 2>&1
+  elif command -v node >/dev/null 2>&1; then
+    node -e "const fs = require('fs'); try { JSON.parse(fs.readFileSync('$file', 'utf8')); } catch(e) { process.exit(1); }"
+  else
+    echo "Error: neither jq nor node found for JSON validation."
+    exit 1
+  fi
+}
 
 # Function to download a schema
 vendor_schema() {
@@ -29,7 +41,7 @@ vendor_schema() {
   fi
 
   # Validation (basic check if it's JSON)
-  if ! jq . "$target" >/dev/null 2>&1; then
+  if ! validate_json "$target"; then
      echo "Error: Downloaded file $filename is not valid JSON."
      exit 1
   fi

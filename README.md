@@ -71,11 +71,22 @@ Plexer wendet automatisch den korrekten Auth-Header je nach Zielsystem an.
 ### Persistence & Queue
 Plexer nutzt eine persistente, dateibasierte Queue (`failed_forwards.jsonl`), um Events auch bei temporären Ausfällen der Konsumenten zuzustellen. Die Verarbeitung erfolgt thread-safe über `proper-lockfile` (Locking auf `failed_forwards.lock`), sodass mehrere Prozesse oder Neustarts keine Datenkorruption verursachen.
 
-### Critical vs. Best-Effort Events
-Die Unterscheidung erfolgt derzeit basierend auf der Konstantenliste in `src/constants.ts`:
+### Critical Consumer vs. Best-Effort
+Die Unterscheidung erfolgt primär anhand des Konsumenten und sekundär per Event-Override:
 
-- **Critical Events** (z.B. `knowledge.observatory.published.v1`, `insights.daily.published`): Werden bei Fehlschlag in der Queue gespeichert und mit exponential backoff wiederholt.
-- **Best-Effort Events** (z.B. `integrity.summary.published.v1`): Dienen primär als optionale Hinting-Signale für Pull-Mechanismen. Bei Fehlschlag werden sie nur als Warning geloggt und verworfen, um die Queue nicht zu verstopfen.
+1. **Heimgeist (Critical Consumer)**:
+   - Zielsystem für persistente Datenhaltung.
+   - Events, die an Heimgeist nicht zugestellt werden können, werden **gequeued** und via Exponential Backoff wiederholt.
+   - Ausnahme: Events in `BEST_EFFORT_EVENTS` (z.B. `integrity.summary.published.v1`) werden auch für Heimgeist nicht gequeued.
+
+2. **Andere Konsumenten (Leitstand, hausKI, Chronik)**:
+   - **Fire-and-Forget / Best-Effort**.
+   - Fehlschläge werden geloggt (als Warning), aber **niemals gequeued**.
+   - Dies verhindert, dass ein einzelner langsamer Konsument den Plexer blockiert oder die Queue füllt.
+
+3. **Best-Effort Events Override**:
+   - Events wie `integrity.summary.published.v1` (Pull-based hints) oder `plexer.delivery.report.v1` (Ephemeral Status) sind in `BEST_EFFORT_EVENTS` definiert.
+   - Diese werden **niemals** gequeued, auch nicht für Heimgeist.
 
 ### Contracts Ownership
 Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports liegen in `src/vendor/schemas/`.

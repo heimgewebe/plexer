@@ -1,5 +1,6 @@
 import { createServer, drainPendingRequests, processEvent, getPendingRequestCount } from './server';
 import { config } from './config';
+import { EVENT_PLEXER_DELIVERY_REPORT_V1 } from './constants';
 import { retryFailedEvents, getNextDueAt, initDelivery, getDeliveryMetrics } from './delivery';
 
 const app = createServer();
@@ -17,9 +18,11 @@ setInterval(() => {
   if (process.env.NODE_ENV !== 'test') {
     const report = getDeliveryMetrics(getPendingRequestCount());
     processEvent({
-      type: 'plexer.delivery.report.v1',
+      type: EVENT_PLEXER_DELIVERY_REPORT_V1,
       source: 'plexer',
       payload: report
+    }).catch((err) => {
+      console.error('Failed to send delivery report event:', err);
     });
   }
 }, REPORT_INTERVAL_MS);

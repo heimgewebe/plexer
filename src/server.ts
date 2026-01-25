@@ -8,6 +8,7 @@ import {
   BEST_EFFORT_EVENTS,
 } from './constants';
 import { CONSUMERS } from './consumers';
+import { getAuthHeaders } from './auth';
 import {
   saveFailedEvent,
   getDeliveryMetrics,
@@ -286,11 +287,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
         'Content-Type': 'application/json',
       };
       if (token) {
-        if (authKind === 'x-auth') {
-          headers['X-Auth'] = token;
-        } else if (authKind === 'bearer') {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
+        Object.assign(headers, getAuthHeaders(authKind, token, key));
       }
 
       const fetchPromise = fetch(url, {
