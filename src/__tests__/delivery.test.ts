@@ -4,8 +4,18 @@ import fs from 'fs';
 import readline from 'readline';
 import { lock } from 'proper-lockfile';
 
-// Mock fs/promises using auto-mock
-jest.mock('fs/promises');
+// Mock fs/promises with explicit factory
+jest.mock('fs/promises', () => ({
+  appendFile: jest.fn(),
+  writeFile: jest.fn(),
+  access: jest.fn(),
+  rename: jest.fn(),
+  unlink: jest.fn(),
+  readdir: jest.fn(),
+  readFile: jest.fn(),
+  mkdir: jest.fn(),
+  stat: jest.fn(),
+}));
 
 // Mock fs (createReadStream)
 jest.mock('fs', () => ({
@@ -233,6 +243,9 @@ describe('Delivery Reliability', () => {
     });
 
     it('should handle stream errors gracefully during retry', async () => {
+        // Mock renaming success
+        mockRename.mockResolvedValue(undefined);
+
         // Setup a stream that emits error
         mockStream.on.mockImplementation((event: string, cb: Function) => {
             if (event === 'error') {
@@ -246,22 +259,23 @@ describe('Delivery Reliability', () => {
             await new Promise(r => setTimeout(r, 100));
         })());
 
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
         await retryFailedEvents();
 
-        // The error should be caught and logged (verified by no crash)
-        // Processing file should NOT be unlinked if we crash loop (wait, implementation catches and continues?)
-        // In current impl: catch(err) -> log -> finally release.
-        // If the loop throws, we catch at the top level of retryFailedEvents.
+        // Expect lock release to be called (finally block)
+        expect(mockLockRelease).toHaveBeenCalled();
 
-        // Verify we entered catch block (we can check console.error but that's noisy)
-        // Verification: If stream errors, the loop throws.
-        // The catch block logs error.
-        // Importantly: unlink is skipped?
-        // Let's check implementation:
-        // try { ... loop ... unlink ... } catch { log }
-        // So unlink IS skipped.
+        // Expect console error to be called with specific error
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+            expect.stringContaining('Error processing failed events'),
+            expect.any(Error)
+        );
 
+        // Expect processing file NOT to be unlinked (crash recovery logic)
         expect(mockUnlink).not.toHaveBeenCalled();
+
+        consoleErrorSpy.mockRestore();
     });
   });
 

@@ -270,8 +270,7 @@ export async function retryFailedEvents(): Promise<void> {
     const now = Date.now();
 
     if (!processingFile) {
-        console.error('[Reliability] No processing file path');
-        return;
+        throw new Error('[Reliability] Processing file not defined despite lock acquisition');
     }
 
     for await (const line of readLinesSafe(processingFile)) {
