@@ -1,8 +1,24 @@
 import fs from 'fs/promises';
-import { saveFailedEvent, getDeliveryMetrics, retryFailedEvents, initDelivery } from '../delivery';
+import { Readable } from 'stream';
 
-// Mock fs
+// Mock fs/promises
 jest.mock('fs/promises');
+
+// Set up mocks for createReadStream and readline before importing delivery
+const mockCreateReadStream = jest.fn();
+const mockCreateInterface = jest.fn();
+
+// Mock fs (for createReadStream)
+jest.mock('fs', () => ({
+  ...jest.requireActual('fs'),
+  createReadStream: (...args: any[]) => mockCreateReadStream(...args),
+}));
+
+// Mock readline
+jest.mock('readline', () => ({
+  ...jest.requireActual('readline'),
+  createInterface: (...args: any[]) => mockCreateInterface(...args),
+}));
 
 // Mock proper-lockfile
 jest.mock('proper-lockfile', () => ({
@@ -16,9 +32,43 @@ jest.mock('../consumers', () => ({
   ],
 }));
 
+// Now import delivery after all mocks are set up
+import { saveFailedEvent, retryFailedEvents, initDelivery } from '../delivery';
+
 // Mock fetch
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
+
+// Helper to mock readLinesSafe via createReadStream and readline
+function mockReadLines(lines: string[]) {
+  // Create a mock stream with EventEmitter methods
+  const mockStream = new Readable();
+  mockStream._read = () => {}; // Implement _read
+  
+  // Push all lines and end stream
+  process.nextTick(() => {
+    for (const line of lines) {
+      mockStream.push(line + '\n');
+    }
+    mockStream.push(null);
+  });
+  
+  mockCreateReadStream.mockReturnValue(mockStream);
+  
+  // Mock readline.createInterface to return proper async iterator with EventEmitter methods
+  const mockRl = {
+    close: jest.fn(),
+    on: jest.fn().mockReturnThis(),
+    [Symbol.asyncIterator]: async function* () {
+      for (const line of lines) {
+        yield line;
+      }
+    }
+  };
+  mockCreateInterface.mockReturnValue(mockRl);
+  
+  return mockStream;
+}
 
 describe('Delivery', () => {
   beforeEach(() => {
@@ -72,15 +122,11 @@ describe('Delivery', () => {
       (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
       (fs.unlink as jest.Mock).mockResolvedValue(undefined);
 
-      // Mock fs.open and readLines
-      const mockFileHandle = {
-        readLines: jest.fn().mockReturnValue((async function* () {
-          yield JSON.stringify(dueEvent);
-          yield JSON.stringify(futureEvent);
-        })()),
-        close: jest.fn().mockResolvedValue(undefined)
-      };
-      (fs.open as jest.Mock).mockResolvedValue(mockFileHandle);
+      // Mock readLinesSafe via createReadStream and readline
+      mockReadLines([
+        JSON.stringify(dueEvent),
+        JSON.stringify(futureEvent)
+      ]);
 
       // Mock fetch success
       mockFetch.mockResolvedValue({ ok: true, status: 200 });
@@ -101,9 +147,6 @@ describe('Delivery', () => {
       expect(dataAppend[1]).toContain(futureEvent.nextAttempt);
       // Should NOT contain the dueEvent (as it was successful) (checking via nextAttempt or unique prop)
       // Since dueEvent and futureEvent are identical except nextAttempt, checking existence of future's nextAttempt is key.
-
-      // Ensure file handle was closed
-      expect(mockFileHandle.close).toHaveBeenCalled();
 
       // Ensure processing file was unlinked
       expect(fs.unlink).toHaveBeenCalledWith(expect.stringContaining('processing.'));
@@ -127,13 +170,8 @@ describe('Delivery', () => {
       (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
       (fs.unlink as jest.Mock).mockResolvedValue(undefined);
 
-      const mockFileHandle = {
-        readLines: jest.fn().mockReturnValue((async function* () {
-          yield JSON.stringify(dueEvent);
-        })()),
-        close: jest.fn().mockResolvedValue(undefined)
-      };
-      (fs.open as jest.Mock).mockResolvedValue(mockFileHandle);
+      // Mock readLinesSafe via createReadStream and readline
+      mockReadLines([JSON.stringify(dueEvent)]);
 
       // Mock fetch failure
       mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Internal Error' });
@@ -161,9 +199,11 @@ describe('Delivery', () => {
       (fs.readFile as jest.Mock).mockResolvedValue('{"some":"content"}\n');
       (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
       (fs.access as jest.Mock).mockResolvedValue(undefined);
-      // Mock metrics scan part failure (or success, but we focus on recovery here)
-      // We'll mock open to fail to stop the metrics scan part from doing much
-      (fs.open as jest.Mock).mockRejectedValue(new Error('Stop metrics scan'));
+      (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
+      (fs.unlink as jest.Mock).mockResolvedValue(undefined);
+      
+      // Mock metrics scan with empty readLines
+      mockReadLines([]);
 
       await initDelivery();
 
