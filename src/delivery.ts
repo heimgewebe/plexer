@@ -269,7 +269,12 @@ export async function retryFailedEvents(): Promise<void> {
     const remainingEvents: FailedEvent[] = [];
     const now = Date.now();
 
-    for await (const line of readLinesSafe(processingFile!)) {
+    if (!processingFile) {
+        console.error('[Reliability] No processing file path');
+        return;
+    }
+
+    for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
 
       let entry: FailedEvent;
@@ -366,7 +371,7 @@ export async function retryFailedEvents(): Promise<void> {
     }
 
     // THEN cleanup processing file
-    await fs.unlink(processingFile!);
+    await fs.unlink(processingFile);
 
     // Reset global metrics based on remaining events
     let minNext = Infinity;

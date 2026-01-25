@@ -4,18 +4,8 @@ import fs from 'fs';
 import readline from 'readline';
 import { lock } from 'proper-lockfile';
 
-// Mock fs/promises
-jest.mock('fs/promises', () => ({
-  appendFile: jest.fn(),
-  writeFile: jest.fn(),
-  access: jest.fn(),
-  rename: jest.fn(),
-  unlink: jest.fn(),
-  readdir: jest.fn(),
-  readFile: jest.fn(),
-  mkdir: jest.fn(),
-  stat: jest.fn(),
-}));
+// Mock fs/promises using auto-mock
+jest.mock('fs/promises');
 
 // Mock fs (createReadStream)
 jest.mock('fs', () => ({
@@ -51,7 +41,7 @@ describe('Delivery Reliability', () => {
   let mockRl: any;
   let mockLockRelease: any;
 
-  // Access mocks via imported modules
+  // Access mocks
   const mockAppendFile = fsPromises.appendFile as jest.Mock;
   const mockWriteFile = fsPromises.writeFile as jest.Mock;
   const mockAccess = fsPromises.access as jest.Mock;
@@ -240,6 +230,38 @@ describe('Delivery Reliability', () => {
             expect.stringContaining('"retryCount":0'),
             'utf8'
           );
+    });
+
+    it('should handle stream errors gracefully during retry', async () => {
+        // Setup a stream that emits error
+        mockStream.on.mockImplementation((event: string, cb: Function) => {
+            if (event === 'error') {
+                // Simulate async error emission
+                setTimeout(() => cb(new Error('Stream failure')), 1);
+            }
+        });
+
+        // Ensure generator hangs or waits (the error will race it)
+        mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {
+            await new Promise(r => setTimeout(r, 100));
+        })());
+
+        await retryFailedEvents();
+
+        // The error should be caught and logged (verified by no crash)
+        // Processing file should NOT be unlinked if we crash loop (wait, implementation catches and continues?)
+        // In current impl: catch(err) -> log -> finally release.
+        // If the loop throws, we catch at the top level of retryFailedEvents.
+
+        // Verify we entered catch block (we can check console.error but that's noisy)
+        // Verification: If stream errors, the loop throws.
+        // The catch block logs error.
+        // Importantly: unlink is skipped?
+        // Let's check implementation:
+        // try { ... loop ... unlink ... } catch { log }
+        // So unlink IS skipped.
+
+        expect(mockUnlink).not.toHaveBeenCalled();
     });
   });
 

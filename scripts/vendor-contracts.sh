@@ -16,7 +16,7 @@ validate_json() {
   if command -v jq >/dev/null 2>&1; then
     jq . "$file" >/dev/null 2>&1
   elif command -v node >/dev/null 2>&1; then
-    node -e "const fs = require('fs'); try { JSON.parse(fs.readFileSync('$file')); } catch(e) { process.exit(1); }"
+    node -e "const fs = require('fs'); try { JSON.parse(fs.readFileSync('$file', 'utf8')); } catch(e) { process.exit(1); }"
   else
     echo "Error: neither jq nor node found for JSON validation."
     exit 1
