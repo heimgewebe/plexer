@@ -315,10 +315,9 @@ export async function retryFailedEvents(): Promise<void> {
           if (consumer.token) {
             if (consumer.authKind === 'x-auth') {
                 headers['X-Auth'] = consumer.token;
-            } else if (consumer.authKind === 'bearer') {
-                headers['Authorization'] = `Bearer ${consumer.token}`;
             } else {
-                 headers['Authorization'] = `Bearer ${consumer.token}`;
+                // Default to Bearer (includes 'bearer' and unknown)
+                headers['Authorization'] = `Bearer ${consumer.token}`;
             }
           }
 
