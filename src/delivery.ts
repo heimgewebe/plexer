@@ -9,6 +9,7 @@ import { lock } from 'proper-lockfile';
 import { config } from './config';
 import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
+import { getAuthHeaders } from './auth';
 
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
@@ -309,16 +310,11 @@ export async function retryFailedEvents(): Promise<void> {
         }
 
         try {
-          const headers: Record<string, string> = {
+          let headers: Record<string, string> = {
             'Content-Type': 'application/json',
           };
           if (consumer.token) {
-            if (consumer.authKind === 'x-auth') {
-                headers['X-Auth'] = consumer.token;
-            } else {
-                // Default to Bearer (includes 'bearer' and unknown)
-                headers['Authorization'] = `Bearer ${consumer.token}`;
-            }
+            headers = getAuthHeaders(consumer.authKind, consumer.token, consumer.key);
           }
 
           const res = await fetch(consumer.url!, {

@@ -249,14 +249,18 @@ describe('Delivery Reliability', () => {
         // Setup a stream that emits error
         mockStream.on.mockImplementation((event: string, cb: Function) => {
             if (event === 'error') {
-                // Simulate async error emission
-                setTimeout(() => cb(new Error('Stream failure')), 1);
+                // Trigger callback immediately (synchronously)
+                cb(new Error('Stream failure'));
             }
         });
 
-        // Ensure generator hangs or waits (the error will race it)
+        // Ensure generator allows the error to propagate
         mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {
-            await new Promise(r => setTimeout(r, 100));
+            // Yield nothing, just wait for the error handler to catch the stream error
+            // which in readLinesSafe happens via Promise.race
+            // We need to keep this promise pending or slow enough if we were relying on race,
+            // but since we trigger error immediately in .on(), the race should pick it up.
+            await new Promise(r => setTimeout(r, 10));
         })());
 
         const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});

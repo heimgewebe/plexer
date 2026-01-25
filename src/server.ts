@@ -8,6 +8,7 @@ import {
   BEST_EFFORT_EVENTS,
 } from './constants';
 import { CONSUMERS } from './consumers';
+import { getAuthHeaders } from './auth';
 import {
   saveFailedEvent,
   getDeliveryMetrics,
@@ -282,21 +283,11 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
     }
 
     try {
-      const headers: Record<string, string> = {
+      let headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
       if (token) {
-        if (authKind === 'x-auth') {
-          headers['X-Auth'] = token;
-        } else {
-          // Default to Bearer, but warn if unknown
-          if (authKind !== 'bearer') {
-            console.warn(
-              `Unknown authKind "${authKind}" for consumer ${key}; defaulting to Bearer`,
-            );
-          }
-          headers['Authorization'] = `Bearer ${token}`;
-        }
+        headers = getAuthHeaders(authKind, token, key);
       }
 
       const fetchPromise = fetch(url, {
