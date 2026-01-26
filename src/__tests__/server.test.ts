@@ -1,6 +1,16 @@
 import request from 'supertest';
 import { createServer, processEvent } from '../server';
 import { config } from '../config';
+import { logger } from '../logger';
+
+// Mock logger
+jest.mock('../logger', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  },
+}));
 
 // Mock config
 jest.mock('../config', () => ({
@@ -62,10 +72,6 @@ describe('Server', () => {
     });
     global.fetch = fetchMock;
 
-    // Spy on console.log/error to prevent noise during tests (optional, but good for assertion)
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -231,8 +237,8 @@ describe('Server', () => {
 
       // Verify no errors or warnings for successful forward
       await new Promise(process.nextTick);
-      expect(console.warn).not.toHaveBeenCalled();
-      expect(console.error).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
     });
 
     it('should forward integrity.summary.published.v1 event to all configured consumers (fanout)', async () => {
@@ -335,16 +341,16 @@ describe('Server', () => {
       // Only Heimgeist should receive 'test.event'
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      // We check that console.log was called
-      expect(console.log).toHaveBeenCalledWith(
-        'Received event',
+      // We check that logger.info was called
+      expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'test.event',
           source: 'test-suite',
           // The payload preview should be truncated in the log
           // We can't easily check the exact string here because it's JSON stringified
           // and might include structure, but we can check it was called.
-        })
+        }),
+        'Received event'
       );
     });
 
@@ -374,12 +380,12 @@ describe('Server', () => {
         body: expectedBody,
       });
 
-      expect(console.log).toHaveBeenCalledWith(
-        'Received event',
+      expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'padded.event',
           source: 'padded-source',
         }),
+        'Received event',
       );
     });
 
@@ -402,7 +408,7 @@ describe('Server', () => {
       await new Promise(process.nextTick);
 
       // One failure should be logged
-      expect(console.error).toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalled();
     });
 
     it('should reject missing type', async () => {
@@ -585,17 +591,17 @@ describe('Server', () => {
       await new Promise(process.nextTick);
 
       // Verify it was logged as a warning, NOT an error
-      expect(console.warn).toHaveBeenCalledWith(
-        expect.stringContaining('[Best-Effort]'),
+      expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           log_kind: 'best_effort_forward_failed',
           type: 'integrity.summary.published.v1',
           label: expect.any(String),
-        })
+        }),
+        expect.stringContaining('[Best-Effort]')
       );
-      expect(console.error).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
       // Verify "Event forwarded" success log is NOT called
-      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
+      expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Event forwarded');
     });
 
     it('should treat insights.daily.published events as critical (log error on failure)', async () => {
@@ -617,19 +623,19 @@ describe('Server', () => {
       await new Promise(process.nextTick);
 
       // Verify Heimgeist failure was logged as an error (Critical Push)
-      expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('Error forwarding event to Heimgeist'),
-        expect.anything()
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('Error forwarding event to Heimgeist')
       );
 
       // Verify no warnings for others (since insights.daily is NOT broadcasted to others)
-      expect(console.warn).not.toHaveBeenCalledWith(
-        expect.stringContaining('[Best-Effort]'),
-        expect.anything()
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.stringContaining('[Best-Effort]')
       );
 
       // Verify "Event forwarded" success log is NOT called
-      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
+      expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Event forwarded');
     });
 
     it('should explicitly treat integrity.summary.published.v1 as best-effort on non-2xx response (warn instead of error)', async () => {
@@ -657,18 +663,18 @@ describe('Server', () => {
 
       await new Promise(process.nextTick);
 
-      expect(console.warn).toHaveBeenCalledWith(
-        expect.stringContaining('[Best-Effort]'),
+      expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           status: 500,
           type: 'integrity.summary.published.v1',
           log_kind: 'best_effort_forward_failed',
           label: expect.any(String),
-        })
+        }),
+        expect.stringContaining('[Best-Effort]')
       );
-      expect(console.error).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
       // Verify "Event forwarded" success log is NOT called
-      expect(console.log).not.toHaveBeenCalledWith('Event forwarded', expect.anything());
+      expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Event forwarded');
     });
   });
 
@@ -707,9 +713,9 @@ describe('Server', () => {
       // Wait for async processing
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      expect(console.error).toHaveBeenCalledWith(
-        expect.stringContaining('token rejected'),
-        expect.objectContaining({})
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({}),
+        expect.stringContaining('token rejected')
       );
     });
 
@@ -727,11 +733,11 @@ describe('Server', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       // Check success log
-      expect(console.log).toHaveBeenCalledWith(
-        'Event forwarded',
+      expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           publisher: 'test-source',
-        })
+        }),
+        'Event forwarded'
       );
     });
 
@@ -754,12 +760,12 @@ describe('Server', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       // Check success log
-      expect(console.log).toHaveBeenCalledWith(
-        'Event forwarded',
+      expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           publisher: 'heimgewebe/semantAH',
           repo: 'semantAH',
-        })
+        }),
+        'Event forwarded'
       );
     });
   });
