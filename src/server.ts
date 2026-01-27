@@ -1,7 +1,6 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
 import { config } from './config';
-import { logger } from './logger';
 import { PlexerEvent } from './types';
 import {
   BROADCAST_EVENTS,
@@ -66,7 +65,7 @@ export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
   const result = await Promise.race([allFinished, timeoutPromise]);
 
   if (result === 'timeout') {
-    logger.info(
+    console.log(
       `Drain timeout after ${timeoutMs}ms (pending=${pendingFetches.size})`,
     );
   }
@@ -93,9 +92,9 @@ export function createServer(): Express {
 
     // Strict contract validation
     if (!validateDeliveryReport(report)) {
-      logger.error(
-        validateDeliveryReport.errors,
+      console.error(
         'Delivery report failed contract validation:',
+        validateDeliveryReport.errors,
       );
       // We still return it to not break ops, but log the violation
     }
@@ -108,9 +107,9 @@ export function createServer(): Express {
 
     // Validate overall envelope
     if (!validateEventEnvelope(responseEnvelope)) {
-        logger.error(
-            validateEventEnvelope.errors,
+        console.error(
             'Delivery report envelope failed validation:',
+            validateEventEnvelope.errors,
         );
     }
 
@@ -184,7 +183,7 @@ export function createServer(): Express {
       // Process event (logging + forwarding)
       // Detached execution to not block response, but tracked in pendingFetches inside processEvent
       processEvent({ type: normalizedType, source: normalizedSource, payload }).catch(err => {
-        logger.error(err, 'Error processing event:');
+        console.error('Error processing event:', err);
       });
 
       res.status(202).json({ status: 'accepted' });
@@ -216,7 +215,7 @@ export function createServer(): Express {
       });
     }
 
-    logger.error(err);
+    console.error(err.stack);
     res.status(500).json({
       status: 'error',
       message: 'Internal Server Error',
@@ -229,12 +228,10 @@ export function createServer(): Express {
 export async function processEvent(event: PlexerEvent): Promise<void> {
   const { type, source, payload } = event;
 
-  // Optimize: Stringify payload once for both logging and forwarding
-  const { json: payloadJson } = tryJson(payload);
-
   let payloadPreview = String(payload);
 
   if (typeof payload === 'object' && payload !== null) {
+    const payloadJson = tryJson(payload).json;
     payloadPreview = payloadJson ?? '[Circular or invalid payload]';
   }
 
@@ -242,48 +239,38 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
     payloadPreview = `${payloadPreview.slice(0, 100)}…`;
   }
 
-  logger.info(
-    {
-      type,
-      source,
-      payload: payloadPreview,
-    },
-    'Received event',
-  );
+  console.log('Received event', {
+    type,
+    source,
+    payload: payloadPreview,
+  });
 
   // Soft-guard for notification-only events
   if (type === EVENT_INSIGHTS_DAILY_PUBLISHED) {
-    if (payloadJson === null) {
-      logger.warn(
+    const payloadBytes = getPayloadSizeBytes(payload);
+    if (payloadBytes === null) {
+      console.warn(
         `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
       );
-    } else {
-      const payloadBytes = Buffer.byteLength(payloadJson, 'utf8');
-      if (payloadBytes > 1024) {
-        logger.warn(
-          `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
-        );
-      }
+    } else if (payloadBytes > 1024) {
+      console.warn(
+        `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
+      );
     }
   }
 
   // Strict Pass-through: Do not inject 'eventId' or timestamp into the forwarded body.
   // The contract requires the payload to remain untouched.
   let serializedEvent: string;
-  if (payloadJson !== null) {
-    // Manual construction is safe because type/source are strings and payloadJson is valid JSON
-    serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)},"payload":${payloadJson}}`;
-  } else {
-    try {
-      serializedEvent = JSON.stringify({
-        type,
-        source,
-        payload,
-      });
-    } catch (error) {
-      logger.error(error, 'Failed to serialize event payload for forwarding');
-      return;
-    }
+  try {
+    serializedEvent = JSON.stringify({
+      type,
+      source,
+      payload,
+    });
+  } catch (error) {
+    console.error('Failed to serialize event payload for forwarding', error);
+    return;
   }
 
   const eventId = randomUUID();
@@ -326,7 +313,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
           }
 
           if (response.ok) {
-            logger.info(logData, 'Event forwarded');
+            console.log('Event forwarded', logData);
           } else {
             let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
             if (response.status === 401 || response.status === 403) {
@@ -348,7 +335,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
             if (isBestEffortEvent || !isCriticalConsumer) {
               context.log_kind = 'best_effort_forward_failed';
-              logger.warn(context, `[Best-Effort] ${errorMessage}`);
+              console.warn(`[Best-Effort] ${errorMessage}`, context);
             } else {
               saveFailedEvent(
                 {
@@ -358,10 +345,8 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
                 },
                 key,
                 errorMessage,
-              ).catch((e) =>
-                logger.error(e, 'Failed to save failed event'),
-              );
-              logger.error(context, errorMessage);
+              ).catch((e) => console.error('Failed to save failed event', e));
+              console.error(errorMessage, context);
             }
           }
         })
@@ -379,7 +364,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
           if (isBestEffortEvent || !isCriticalConsumer) {
             context.log_kind = 'best_effort_forward_failed';
-            logger.warn(context, `[Best-Effort] ${errorMessage}`);
+            console.warn(`[Best-Effort] ${errorMessage}`, context);
           } else {
             saveFailedEvent(
               {
@@ -389,10 +374,8 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
               },
               key,
               error instanceof Error ? error.message : String(error),
-            ).catch((e) =>
-              logger.error(e, 'Failed to save failed event'),
-            );
-            logger.error(context, errorMessage);
+            ).catch((e) => console.error('Failed to save failed event', e));
+            console.error(errorMessage, context);
           }
         })
         .finally(() => {
@@ -400,7 +383,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
         });
       pendingFetches.add(fetchPromise);
     } catch (error) {
-      logger.error(error, `Failed to initiate forward to ${label}:`);
+      console.error(`Failed to initiate forward to ${label}:`, error);
     }
   });
 }

@@ -12,6 +12,9 @@ import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
 import pLimit from 'p-limit';
 
+const RETRY_CONCURRENCY = 5;
+const RETRY_BATCH_SIZE = 50;
+
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
 let failedCount = 0;
@@ -275,8 +278,8 @@ export async function retryFailedEvents(): Promise<void> {
         throw new Error('[Reliability] Processing file not defined despite lock acquisition');
     }
 
-    const limit = pLimit(5);
-    const retryPromises: Promise<void>[] = [];
+    const limit = pLimit(RETRY_CONCURRENCY);
+    let chunkPromises: Promise<FailedEvent | null>[] = [];
 
     for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
@@ -291,7 +294,8 @@ export async function retryFailedEvents(): Promise<void> {
       const nextTime = new Date(entry.nextAttempt).getTime();
 
       if (nextTime <= now) {
-        retryPromises.push(limit(async () => {
+        chunkPromises.push(limit(async (): Promise<FailedEvent | null> => {
+          const attemptNow = Date.now();
           // Try to send
           const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
           if (!consumer || !consumer.url) {
@@ -302,16 +306,15 @@ export async function retryFailedEvents(): Promise<void> {
               Math.pow(2, entry.retryCount) * 60 * 1000,
               24 * 60 * 60 * 1000,
             );
-            // Consistent 10s jitter
+            // 0-10s jitter
             const jitter = Math.random() * 10000;
-            entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
+            entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
             entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
 
             // Metrics fallback
             entry.lastAttempt = new Date().toISOString();
 
-            remainingEvents.push(entry);
-            return;
+            return entry;
           }
 
           try {
@@ -338,7 +341,8 @@ export async function retryFailedEvents(): Promise<void> {
             console.log(
               `[Retry] Successfully forwarded event ${entry.event.type} to ${consumer.label}`,
             );
-            // Success: do nothing, it's removed from queue (processing file deleted later)
+            // Success: return null to indicate removal
+            return null;
           } catch (err) {
             entry.retryCount++;
             entry.lastAttempt = new Date().toISOString();
@@ -346,9 +350,9 @@ export async function retryFailedEvents(): Promise<void> {
               Math.pow(2, entry.retryCount) * 60 * 1000,
               24 * 60 * 60 * 1000,
             );
-            // Consistent 10s jitter
+            // 0-10s jitter
             const jitter = Math.random() * 10000;
-            entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
+            entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
             entry.error = err instanceof Error ? err.message : String(err);
             lastError = entry.error;
 
@@ -356,16 +360,31 @@ export async function retryFailedEvents(): Promise<void> {
               `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
             );
 
-            remainingEvents.push(entry);
+            return entry;
           }
         }));
       } else {
         // Not time yet -> Re-queue
         remainingEvents.push(entry);
       }
+
+      // Process chunk if size limit reached
+      if (chunkPromises.length >= RETRY_BATCH_SIZE) {
+        const results = await Promise.all(chunkPromises);
+        for (const res of results) {
+          if (res) remainingEvents.push(res);
+        }
+        chunkPromises = [];
+      }
     }
 
-    await Promise.all(retryPromises);
+    // Process remaining promises in the last chunk
+    if (chunkPromises.length > 0) {
+      const results = await Promise.all(chunkPromises);
+      for (const res of results) {
+        if (res) remainingEvents.push(res);
+      }
+    }
 
     // Batch write remaining events first (crash safety)
     if (remainingEvents.length > 0) {
