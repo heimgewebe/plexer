@@ -40,6 +40,7 @@ sowie im Zielbild
 
 - Node.js >= 20
 - pnpm (via Corepack)
+- CI uses `pnpm/action-setup` to ensure consistent pnpm versions.
 
 npm is not supported.
 

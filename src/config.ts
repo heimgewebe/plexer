@@ -11,6 +11,8 @@ export interface Config {
   chronikUrl?: string;
   chronikToken?: string;
   dataDir: string;
+  retryConcurrency: number;
+  retryBatchSize: number;
 }
 
 const getEnv = (name: string): string | undefined => {
@@ -34,6 +36,19 @@ const isValidPort =
 if (!isValidPort) {
   throw new Error('Invalid PORT environment variable');
 }
+
+const validateInt = (
+  name: string,
+  value: string | undefined,
+  defaultValue: number,
+): number => {
+  if (!value) return defaultValue;
+  const parsed = parseInt(value, 10);
+  if (isNaN(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name} environment variable: must be a positive integer`);
+  }
+  return parsed;
+};
 
 const validateUrl = (name: string, value?: string): string | undefined => {
   if (!value) return undefined;
@@ -64,6 +79,17 @@ const leitstandUrl = validateUrl('LEITSTAND_URL', getEnv('LEITSTAND_URL'));
 const hauskiUrl = validateUrl('HAUSKI_URL', getEnv('HAUSKI_URL'));
 const chronikUrl = validateUrl('CHRONIK_URL', getEnv('CHRONIK_URL'));
 
+const retryConcurrency = validateInt(
+  'RETRY_CONCURRENCY',
+  getEnv('RETRY_CONCURRENCY'),
+  5,
+);
+const retryBatchSize = validateInt(
+  'RETRY_BATCH_SIZE',
+  getEnv('RETRY_BATCH_SIZE'),
+  50,
+);
+
 export const config: Config = {
   port: parsedPort,
   host: getEnv('HOST') || '0.0.0.0',
@@ -78,4 +104,6 @@ export const config: Config = {
   hauskiToken: getEnv('HAUSKI_TOKEN') || getEnv('HAUSKI_EVENTS_TOKEN'),
   chronikToken: getEnv('CHRONIK_TOKEN') || getEnv('CHRONIK_EVENTS_TOKEN'),
   dataDir: getEnv('PLEXER_DATA_DIR') || 'data',
+  retryConcurrency,
+  retryBatchSize,
 };
