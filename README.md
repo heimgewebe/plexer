@@ -54,6 +54,13 @@ npm is not supported.
 - `PLEXER_DATA_DIR`: Pfad zum Verzeichnis, in dem die Queue für fehlgeschlagene Events persistiert wird (default: `./data`).
   - **Hinweis für WGX:** Die Flow-Definition in `.wgx/flows.json` erwartet die Queue unter `data/failed_forwards.jsonl`. Wenn `PLEXER_DATA_DIR` geändert wird, muss der Flow-Pfad angepasst oder ein Symlink verwendet werden.
 
+### Reliability & Performance
+
+| Variable | Default | Beschreibung |
+|----------|---------|--------------|
+| `RETRY_CONCURRENCY` | `5` | Anzahl gleichzeitiger Forward-Versuche beim Retry. Erhöht den Durchsatz, belastet aber Zielsysteme stärker. |
+| `RETRY_BATCH_SIZE` | `50` | Anzahl Events, die pro Chunk aus der Datei gelesen werden (Backpressure Control). |
+
 ### Service-URLs & Authentifizierung
 
 Alle URL-Variablen müssen vollqualifiziert sein (inkl. Schema `https://…`).

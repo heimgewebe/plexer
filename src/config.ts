@@ -43,9 +43,18 @@ const validateInt = (
   defaultValue: number,
 ): number => {
   if (!value) return defaultValue;
-  const parsed = parseInt(value, 10);
-  if (isNaN(parsed) || parsed <= 0) {
-    throw new Error(`Invalid ${name} environment variable: must be a positive integer`);
+  const trimmed = value.trim();
+  // Strict check: only digits allowed
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(
+      `Invalid ${name} environment variable: must be a positive integer`,
+    );
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid ${name} environment variable: must be a positive integer`,
+    );
   }
   return parsed;
 };
