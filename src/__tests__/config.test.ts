@@ -251,4 +251,79 @@ describe('config', () => {
       });
     });
   });
+
+  describe('Retry Configuration', () => {
+    it('uses defaults when env vars are not set', () => {
+      delete process.env.RETRY_CONCURRENCY;
+      delete process.env.RETRY_BATCH_SIZE;
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.retryConcurrency).toBe(5);
+        expect(config.retryBatchSize).toBe(50);
+      });
+    });
+
+    it('accepts valid integer strings', () => {
+      process.env.RETRY_CONCURRENCY = '10';
+      process.env.RETRY_BATCH_SIZE = '100';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.retryConcurrency).toBe(10);
+        expect(config.retryBatchSize).toBe(100);
+      });
+    });
+
+    it('accepts values with whitespace', () => {
+      process.env.RETRY_CONCURRENCY = ' 5 ';
+      process.env.RETRY_BATCH_SIZE = ' 50 ';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.retryConcurrency).toBe(5);
+        expect(config.retryBatchSize).toBe(50);
+      });
+    });
+
+    it('rejects non-numeric values (strict check)', () => {
+      process.env.RETRY_CONCURRENCY = '10abc'; // "10abc" would pass parseInt but fail strict check
+
+      expect(() => {
+        jest.isolateModules(() => {
+          require('../config');
+        });
+      }).toThrow('Invalid RETRY_CONCURRENCY environment variable');
+    });
+
+    it('rejects floats', () => {
+      process.env.RETRY_BATCH_SIZE = '10.5';
+
+      expect(() => {
+        jest.isolateModules(() => {
+          require('../config');
+        });
+      }).toThrow('Invalid RETRY_BATCH_SIZE environment variable');
+    });
+
+    it('rejects zero', () => {
+      process.env.RETRY_CONCURRENCY = '0';
+
+      expect(() => {
+        jest.isolateModules(() => {
+          require('../config');
+        });
+      }).toThrow('Invalid RETRY_CONCURRENCY environment variable');
+    });
+
+    it('rejects negative numbers', () => {
+      process.env.RETRY_BATCH_SIZE = '-1';
+
+      expect(() => {
+        jest.isolateModules(() => {
+          require('../config');
+        });
+      }).toThrow('Invalid RETRY_BATCH_SIZE environment variable');
+    });
+  });
 });

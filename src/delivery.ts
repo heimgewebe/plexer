@@ -11,11 +11,8 @@ import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
 import { logger } from './logger';
+// NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
 import pLimit from 'p-limit';
-
-const RETRY_CONCURRENCY = 5;
-// Process events in chunks to prevent unbounded promise accumulation in memory
-const RETRY_BATCH_SIZE = 50;
 
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
@@ -279,7 +276,8 @@ export async function retryFailedEvents(): Promise<void> {
         throw new Error('[Reliability] Processing file not defined despite lock acquisition');
     }
 
-    const limit = pLimit(RETRY_CONCURRENCY);
+    // Use parallelization to increase retry throughput
+    const limit = pLimit(config.retryConcurrency);
     let chunkPromises: Promise<FailedEvent | null>[] = [];
 
     for await (const line of readLinesSafe(processingFile)) {
@@ -372,7 +370,8 @@ export async function retryFailedEvents(): Promise<void> {
       }
 
       // Process chunk if size limit reached
-      if (chunkPromises.length >= RETRY_BATCH_SIZE) {
+      // This chunking prevents unbounded promise accumulation in memory (backpressure)
+      if (chunkPromises.length >= config.retryBatchSize) {
         const results = await Promise.all(chunkPromises);
         for (const res of results) {
           if (res) remainingEvents.push(res);

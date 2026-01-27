@@ -4,6 +4,14 @@ import fs from 'fs';
 import readline from 'readline';
 import { lock } from 'proper-lockfile';
 
+/**
+ * Logger Mock Strategy:
+ * Jest automatically hoists jest.mock calls to the top of the block.
+ * This ensures the logger is mocked before any imports (like ../delivery) use it.
+ * Note: Modules under test must not use the logger at the top-level (outside functions),
+ * otherwise the mock might not apply correctly or could lead to initialization order issues.
+ */
+
 // Mock fs/promises with explicit factory
 jest.mock('fs/promises', () => ({
   appendFile: jest.fn(),
@@ -251,6 +259,40 @@ describe('Delivery Reliability', () => {
             expect.stringContaining('"retryCount":0'),
             'utf8'
           );
+    });
+
+    it('should ensure nextAttempt is strictly in the future after a failed retry', async () => {
+      const now = Date.now();
+      const dueEvent = {
+        consumerKey: 'test-consumer',
+        event: { type: 't', source: 's', payload: {} },
+        retryCount: 0,
+        nextAttempt: new Date(now - 1000).toISOString(), // Due
+        lastAttempt: new Date().toISOString(),
+        error: 'prev error'
+      };
+
+      mockReadLines([JSON.stringify(dueEvent)]);
+
+      // Mock fetch failure (500)
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Error'
+      });
+
+      await retryFailedEvents();
+
+      // Find the call that re-queued the event
+      const appendCalls = mockAppendFile.mock.calls;
+      const failedLogCall = appendCalls.find((args: any[]) => args[0].includes('failed_forwards.jsonl'));
+
+      expect(failedLogCall).toBeDefined();
+      const savedLines = failedLogCall[1].trim().split('\n');
+      const savedEvent = JSON.parse(savedLines[0]); // Should be the only event
+
+      const nextAttemptTime = new Date(savedEvent.nextAttempt).getTime();
+      expect(nextAttemptTime).toBeGreaterThan(now);
     });
 
     it('should handle stream errors gracefully during retry', async () => {
