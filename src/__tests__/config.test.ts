@@ -253,6 +253,16 @@ describe('config', () => {
   });
 
   describe('Retry Configuration', () => {
+    let retryEnv: NodeJS.ProcessEnv;
+
+    beforeEach(() => {
+      retryEnv = { ...process.env };
+    });
+
+    afterEach(() => {
+      process.env = retryEnv;
+    });
+
     it('uses defaults when env vars are not set', () => {
       delete process.env.RETRY_CONCURRENCY;
       delete process.env.RETRY_BATCH_SIZE;
@@ -293,7 +303,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow('Invalid RETRY_CONCURRENCY environment variable');
+      }).toThrow(/Invalid RETRY_CONCURRENCY environment variable/);
     });
 
     it('rejects floats', () => {
@@ -303,7 +313,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow('Invalid RETRY_BATCH_SIZE environment variable');
+      }).toThrow(/Invalid RETRY_BATCH_SIZE environment variable/);
     });
 
     it('rejects zero', () => {
@@ -313,7 +323,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow('Invalid RETRY_CONCURRENCY environment variable');
+      }).toThrow(/Invalid RETRY_CONCURRENCY environment variable/);
     });
 
     it('rejects negative numbers', () => {
@@ -323,7 +333,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow('Invalid RETRY_BATCH_SIZE environment variable');
+      }).toThrow(/Invalid RETRY_BATCH_SIZE environment variable/);
     });
   });
 });
