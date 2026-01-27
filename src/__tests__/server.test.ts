@@ -1,4 +1,6 @@
 import request from 'supertest';
+import { createServer, processEvent } from '../server';
+import { config } from '../config';
 
 // Mock logger
 jest.mock('../logger', () => ({
@@ -9,9 +11,6 @@ jest.mock('../logger', () => ({
     debug: jest.fn(),
   },
 }));
-
-import { createServer, processEvent } from '../server';
-import { config } from '../config';
 import { logger } from '../logger';
 
 // Mock config
@@ -73,7 +72,6 @@ describe('Server', () => {
       json: async () => ({}),
     });
     global.fetch = fetchMock;
-
   });
 
   afterEach(() => {
@@ -387,7 +385,7 @@ describe('Server', () => {
           type: 'padded.event',
           source: 'padded-source',
         }),
-        'Received event',
+        'Received event'
       );
     });
 

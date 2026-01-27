@@ -38,7 +38,7 @@ sowie im Zielbild
 
 ## Tooling
 
-- Node.js >= 20 (required)
+- Node.js >= 20
 - pnpm (via Corepack)
 
 npm is not supported.

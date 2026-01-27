@@ -39,6 +39,17 @@ jest.mock('../consumers', () => ({
   ],
 }));
 
+// Mock logger
+jest.mock('../logger', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
+}));
+import { logger } from '../logger';
+
 // Mock global fetch
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
@@ -261,23 +272,19 @@ describe('Delivery Reliability', () => {
             await new Promise(r => setTimeout(r, 50));
         })());
 
-        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
         await retryFailedEvents();
 
         // Expect lock release to be called (finally block)
         expect(mockLockRelease).toHaveBeenCalled();
 
-        // Expect console error to be called with specific error
-        expect(consoleErrorSpy).toHaveBeenCalledWith(
-            expect.stringContaining('Error processing failed events'),
-            expect.any(Error)
+        // Expect logger error to be called with specific error
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ err: expect.any(Error) }),
+            expect.stringContaining('Error processing failed events')
         );
 
         // Expect processing file NOT to be unlinked (crash recovery logic)
         expect(mockUnlink).not.toHaveBeenCalled();
-
-        consoleErrorSpy.mockRestore();
     });
   });
 

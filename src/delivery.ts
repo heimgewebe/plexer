@@ -10,6 +10,12 @@ import { config } from './config';
 import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
+import { logger } from './logger';
+import pLimit from 'p-limit';
+
+const RETRY_CONCURRENCY = 5;
+// Process events in chunks to prevent unbounded promise accumulation in memory
+const RETRY_BATCH_SIZE = 50;
 
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
@@ -96,7 +102,7 @@ export async function initDelivery(): Promise<void> {
     const processingFiles = files.filter((f) => f.startsWith('processing.') && f.endsWith('.jsonl'));
 
     if (processingFiles.length > 0) {
-      console.log(`Found ${processingFiles.length} orphaned processing files. Recovering...`);
+      logger.info(`Found ${processingFiles.length} orphaned processing files. Recovering...`);
 
       let release;
       try {
@@ -112,11 +118,11 @@ export async function initDelivery(): Promise<void> {
             await fs.appendFile(failedLog, content);
             await fs.unlink(filePath);
           } catch (e) {
-            console.error(`Failed to recover orphaned file ${file}:`, e);
+            logger.error({ err: e, file }, `Failed to recover orphaned file ${file}`);
           }
         }
       } catch (e) {
-        console.error('Failed to lock during recovery:', e);
+        logger.error({ err: e }, 'Failed to lock during recovery');
       } finally {
         if (release) await release();
       }
@@ -149,7 +155,7 @@ export async function initDelivery(): Promise<void> {
         } catch {}
       }
     } catch (e) {
-      console.error('Failed to lock/read FAILED_LOG during metrics scan:', e);
+      logger.error({ err: e }, 'Failed to lock/read FAILED_LOG during metrics scan');
     } finally {
       if (releaseScan) await releaseScan();
     }
@@ -158,7 +164,7 @@ export async function initDelivery(): Promise<void> {
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
   } catch (err) {
-    console.error('Error during startup initialization:', err);
+    logger.error({ err }, 'Error during startup initialization');
   }
 }
 
@@ -186,10 +192,9 @@ export async function saveFailedEvent(
   };
 
   if (!validateFailedEvent(failedEvent)) {
-    console.error(
-      'FailedEvent validation failed:',
-      validateFailedEvent.errors,
-      failedEvent,
+    logger.error(
+      { errors: validateFailedEvent.errors, failedEvent },
+      'FailedEvent validation failed',
     );
     // Don't save invalid events
     return;
@@ -216,7 +221,7 @@ export async function saveFailedEvent(
       nextDueAt = failedEvent.nextAttempt;
     }
   } catch (err) {
-    console.error('[Reliability] Dropped event due to lock failure:', err);
+    logger.error({ err }, '[Reliability] Dropped event due to lock failure');
   } finally {
     if (release) await release();
   }
@@ -274,6 +279,9 @@ export async function retryFailedEvents(): Promise<void> {
         throw new Error('[Reliability] Processing file not defined despite lock acquisition');
     }
 
+    const limit = pLimit(RETRY_CONCURRENCY);
+    let chunkPromises: Promise<FailedEvent | null>[] = [];
+
     for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
 
@@ -287,75 +295,97 @@ export async function retryFailedEvents(): Promise<void> {
       const nextTime = new Date(entry.nextAttempt).getTime();
 
       if (nextTime <= now) {
-        // Try to send
-        const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
-        if (!consumer || !consumer.url) {
-          // Backoff
-          entry.retryCount++;
-          // Jitter backoff
-          const backoff = Math.min(
-            Math.pow(2, entry.retryCount) * 60 * 1000,
-            24 * 60 * 60 * 1000,
-          );
-          // Consistent 10s jitter
-          const jitter = Math.random() * 10000;
-          entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
-          entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
+        chunkPromises.push(limit(async (): Promise<FailedEvent | null> => {
+          const attemptNow = Date.now();
+          // Try to send
+          const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
+          if (!consumer || !consumer.url) {
+            // Backoff
+            entry.retryCount++;
+            // Jitter backoff
+            const backoff = Math.min(
+              Math.pow(2, entry.retryCount) * 60 * 1000,
+              24 * 60 * 60 * 1000,
+            );
+            // 0-10s jitter
+            const jitter = Math.random() * 10000;
+            entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
+            entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
 
-          // Metrics fallback
-          entry.lastAttempt = new Date().toISOString();
+            // Metrics fallback
+            entry.lastAttempt = new Date().toISOString();
 
-          remainingEvents.push(entry);
-          continue;
-        }
-
-        try {
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-          };
-          if (consumer.token) {
-            Object.assign(headers, getAuthHeaders(consumer.authKind, consumer.token, consumer.key));
+            return entry;
           }
 
-          const res = await fetch(consumer.url!, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(entry.event),
-          });
+          try {
+            const headers: Record<string, string> = {
+              'Content-Type': 'application/json',
+            };
+            if (consumer.token) {
+              Object.assign(headers, getAuthHeaders(consumer.authKind, consumer.token, consumer.key));
+            }
 
-          if (!res.ok) {
-            let msg = `${res.status} ${res.statusText}`;
-            if (res.status === 401 || res.status === 403)
-              msg += ' (token rejected)';
-            throw new Error(msg);
+            const res = await fetch(consumer.url!, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(entry.event),
+            });
+
+            if (!res.ok) {
+              let msg = `${res.status} ${res.statusText}`;
+              if (res.status === 401 || res.status === 403)
+                msg += ' (token rejected)';
+              throw new Error(msg);
+            }
+
+            logger.info(
+              { type: entry.event.type, label: consumer.label },
+              `[Retry] Successfully forwarded event ${entry.event.type} to ${consumer.label}`,
+            );
+            // Success: return null to indicate removal
+            return null;
+          } catch (err) {
+            entry.retryCount++;
+            entry.lastAttempt = new Date().toISOString();
+            const backoff = Math.min(
+              Math.pow(2, entry.retryCount) * 60 * 1000,
+              24 * 60 * 60 * 1000,
+            );
+            // 0-10s jitter
+            const jitter = Math.random() * 10000;
+            entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
+            entry.error = err instanceof Error ? err.message : String(err);
+            lastError = entry.error;
+
+            logger.warn(
+              { label: consumer.label, error: entry.error },
+              `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
+            );
+
+            return entry;
           }
-
-          console.log(
-            `[Retry] Successfully forwarded event ${entry.event.type} to ${consumer.label}`,
-          );
-          // Success: do nothing, it's removed from queue (processing file deleted later)
-        } catch (err) {
-          entry.retryCount++;
-          entry.lastAttempt = new Date().toISOString();
-          const backoff = Math.min(
-            Math.pow(2, entry.retryCount) * 60 * 1000,
-            24 * 60 * 60 * 1000,
-          );
-          // Consistent 10s jitter
-          const jitter = Math.random() * 10000;
-          entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
-          entry.error = err instanceof Error ? err.message : String(err);
-          lastError = entry.error;
-
-          console.warn(
-            `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
-          );
-
-          remainingEvents.push(entry);
-        }
+        }));
       } else {
         // Not time yet -> Re-queue
         remainingEvents.push(entry);
+      }
+
+      // Process chunk if size limit reached
+      if (chunkPromises.length >= RETRY_BATCH_SIZE) {
+        const results = await Promise.all(chunkPromises);
+        for (const res of results) {
+          if (res) remainingEvents.push(res);
+        }
+        chunkPromises = [];
+      }
+    }
+
+    // Process remaining promises in the last chunk
+    if (chunkPromises.length > 0) {
+      const results = await Promise.all(chunkPromises);
+      for (const res of results) {
+        if (res) remainingEvents.push(res);
       }
     }
 
@@ -385,7 +415,7 @@ export async function retryFailedEvents(): Promise<void> {
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
 
   } catch (err) {
-    console.error('[Reliability] Error processing failed events:', err);
+    logger.error({ err }, '[Reliability] Error processing failed events');
     // IMPORTANT: If we crash here (e.g. during batchAppendEvents),
     // we DO NOT unlink processingFile.
     // initDelivery will pick it up next time.
