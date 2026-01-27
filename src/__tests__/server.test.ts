@@ -1,7 +1,4 @@
 import request from 'supertest';
-import { createServer, processEvent } from '../server';
-import { config } from '../config';
-import { logger } from '../logger';
 
 // Mock logger
 jest.mock('../logger', () => ({
@@ -12,6 +9,10 @@ jest.mock('../logger', () => ({
     debug: jest.fn(),
   },
 }));
+
+import { createServer, processEvent } from '../server';
+import { config } from '../config';
+import { logger } from '../logger';
 
 // Mock config
 jest.mock('../config', () => ({
