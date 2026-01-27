@@ -14,6 +14,7 @@ import { logger } from './logger';
 import pLimit from 'p-limit';
 
 const RETRY_CONCURRENCY = 5;
+// Process events in chunks to prevent unbounded promise accumulation in memory
 const RETRY_BATCH_SIZE = 50;
 
 let lastError: string | null = null;
