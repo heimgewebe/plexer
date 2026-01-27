@@ -10,6 +10,7 @@ import { config } from './config';
 import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
+import pLimit from 'p-limit';
 
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
@@ -274,6 +275,9 @@ export async function retryFailedEvents(): Promise<void> {
         throw new Error('[Reliability] Processing file not defined despite lock acquisition');
     }
 
+    const limit = pLimit(5);
+    const retryPromises: Promise<void>[] = [];
+
     for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
 
@@ -287,77 +291,81 @@ export async function retryFailedEvents(): Promise<void> {
       const nextTime = new Date(entry.nextAttempt).getTime();
 
       if (nextTime <= now) {
-        // Try to send
-        const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
-        if (!consumer || !consumer.url) {
-          // Backoff
-          entry.retryCount++;
-          // Jitter backoff
-          const backoff = Math.min(
-            Math.pow(2, entry.retryCount) * 60 * 1000,
-            24 * 60 * 60 * 1000,
-          );
-          // Consistent 10s jitter
-          const jitter = Math.random() * 10000;
-          entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
-          entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
+        retryPromises.push(limit(async () => {
+          // Try to send
+          const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
+          if (!consumer || !consumer.url) {
+            // Backoff
+            entry.retryCount++;
+            // Jitter backoff
+            const backoff = Math.min(
+              Math.pow(2, entry.retryCount) * 60 * 1000,
+              24 * 60 * 60 * 1000,
+            );
+            // Consistent 10s jitter
+            const jitter = Math.random() * 10000;
+            entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
+            entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
 
-          // Metrics fallback
-          entry.lastAttempt = new Date().toISOString();
+            // Metrics fallback
+            entry.lastAttempt = new Date().toISOString();
 
-          remainingEvents.push(entry);
-          continue;
-        }
-
-        try {
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-          };
-          if (consumer.token) {
-            Object.assign(headers, getAuthHeaders(consumer.authKind, consumer.token, consumer.key));
+            remainingEvents.push(entry);
+            return;
           }
 
-          const res = await fetch(consumer.url!, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(entry.event),
-          });
+          try {
+            const headers: Record<string, string> = {
+              'Content-Type': 'application/json',
+            };
+            if (consumer.token) {
+              Object.assign(headers, getAuthHeaders(consumer.authKind, consumer.token, consumer.key));
+            }
 
-          if (!res.ok) {
-            let msg = `${res.status} ${res.statusText}`;
-            if (res.status === 401 || res.status === 403)
-              msg += ' (token rejected)';
-            throw new Error(msg);
+            const res = await fetch(consumer.url!, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify(entry.event),
+            });
+
+            if (!res.ok) {
+              let msg = `${res.status} ${res.statusText}`;
+              if (res.status === 401 || res.status === 403)
+                msg += ' (token rejected)';
+              throw new Error(msg);
+            }
+
+            console.log(
+              `[Retry] Successfully forwarded event ${entry.event.type} to ${consumer.label}`,
+            );
+            // Success: do nothing, it's removed from queue (processing file deleted later)
+          } catch (err) {
+            entry.retryCount++;
+            entry.lastAttempt = new Date().toISOString();
+            const backoff = Math.min(
+              Math.pow(2, entry.retryCount) * 60 * 1000,
+              24 * 60 * 60 * 1000,
+            );
+            // Consistent 10s jitter
+            const jitter = Math.random() * 10000;
+            entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
+            entry.error = err instanceof Error ? err.message : String(err);
+            lastError = entry.error;
+
+            console.warn(
+              `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
+            );
+
+            remainingEvents.push(entry);
           }
-
-          console.log(
-            `[Retry] Successfully forwarded event ${entry.event.type} to ${consumer.label}`,
-          );
-          // Success: do nothing, it's removed from queue (processing file deleted later)
-        } catch (err) {
-          entry.retryCount++;
-          entry.lastAttempt = new Date().toISOString();
-          const backoff = Math.min(
-            Math.pow(2, entry.retryCount) * 60 * 1000,
-            24 * 60 * 60 * 1000,
-          );
-          // Consistent 10s jitter
-          const jitter = Math.random() * 10000;
-          entry.nextAttempt = new Date(now + backoff + jitter).toISOString();
-          entry.error = err instanceof Error ? err.message : String(err);
-          lastError = entry.error;
-
-          console.warn(
-            `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
-          );
-
-          remainingEvents.push(entry);
-        }
+        }));
       } else {
         // Not time yet -> Re-queue
         remainingEvents.push(entry);
       }
     }
+
+    await Promise.all(retryPromises);
 
     // Batch write remaining events first (crash safety)
     if (remainingEvents.length > 0) {
