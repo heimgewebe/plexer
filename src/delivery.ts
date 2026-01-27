@@ -10,6 +10,7 @@ import { config } from './config';
 import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
+import { logger } from './logger';
 import pLimit from 'p-limit';
 
 const RETRY_CONCURRENCY = 5;
@@ -100,7 +101,7 @@ export async function initDelivery(): Promise<void> {
     const processingFiles = files.filter((f) => f.startsWith('processing.') && f.endsWith('.jsonl'));
 
     if (processingFiles.length > 0) {
-      console.log(`Found ${processingFiles.length} orphaned processing files. Recovering...`);
+      logger.info(`Found ${processingFiles.length} orphaned processing files. Recovering...`);
 
       let release;
       try {
@@ -116,11 +117,11 @@ export async function initDelivery(): Promise<void> {
             await fs.appendFile(failedLog, content);
             await fs.unlink(filePath);
           } catch (e) {
-            console.error(`Failed to recover orphaned file ${file}:`, e);
+            logger.error({ err: e, file }, `Failed to recover orphaned file ${file}`);
           }
         }
       } catch (e) {
-        console.error('Failed to lock during recovery:', e);
+        logger.error({ err: e }, 'Failed to lock during recovery');
       } finally {
         if (release) await release();
       }
@@ -153,7 +154,7 @@ export async function initDelivery(): Promise<void> {
         } catch {}
       }
     } catch (e) {
-      console.error('Failed to lock/read FAILED_LOG during metrics scan:', e);
+      logger.error({ err: e }, 'Failed to lock/read FAILED_LOG during metrics scan');
     } finally {
       if (releaseScan) await releaseScan();
     }
@@ -162,7 +163,7 @@ export async function initDelivery(): Promise<void> {
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
   } catch (err) {
-    console.error('Error during startup initialization:', err);
+    logger.error({ err }, 'Error during startup initialization');
   }
 }
 
@@ -190,10 +191,9 @@ export async function saveFailedEvent(
   };
 
   if (!validateFailedEvent(failedEvent)) {
-    console.error(
-      'FailedEvent validation failed:',
-      validateFailedEvent.errors,
-      failedEvent,
+    logger.error(
+      { errors: validateFailedEvent.errors, failedEvent },
+      'FailedEvent validation failed',
     );
     // Don't save invalid events
     return;
@@ -220,7 +220,7 @@ export async function saveFailedEvent(
       nextDueAt = failedEvent.nextAttempt;
     }
   } catch (err) {
-    console.error('[Reliability] Dropped event due to lock failure:', err);
+    logger.error({ err }, '[Reliability] Dropped event due to lock failure');
   } finally {
     if (release) await release();
   }
@@ -338,7 +338,8 @@ export async function retryFailedEvents(): Promise<void> {
               throw new Error(msg);
             }
 
-            console.log(
+            logger.info(
+              { type: entry.event.type, label: consumer.label },
               `[Retry] Successfully forwarded event ${entry.event.type} to ${consumer.label}`,
             );
             // Success: return null to indicate removal
@@ -356,7 +357,8 @@ export async function retryFailedEvents(): Promise<void> {
             entry.error = err instanceof Error ? err.message : String(err);
             lastError = entry.error;
 
-            console.warn(
+            logger.warn(
+              { label: consumer.label, error: entry.error },
               `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
             );
 
@@ -412,7 +414,7 @@ export async function retryFailedEvents(): Promise<void> {
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
 
   } catch (err) {
-    console.error('[Reliability] Error processing failed events:', err);
+    logger.error({ err }, '[Reliability] Error processing failed events');
     // IMPORTANT: If we crash here (e.g. during batchAppendEvents),
     // we DO NOT unlink processingFile.
     // initDelivery will pick it up next time.

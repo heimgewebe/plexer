@@ -9,6 +9,7 @@ import {
 } from './constants';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
+import { logger } from './logger';
 import {
   saveFailedEvent,
   getDeliveryMetrics,
@@ -65,7 +66,7 @@ export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
   const result = await Promise.race([allFinished, timeoutPromise]);
 
   if (result === 'timeout') {
-    console.log(
+    logger.warn(
       `Drain timeout after ${timeoutMs}ms (pending=${pendingFetches.size})`,
     );
   }
@@ -92,9 +93,9 @@ export function createServer(): Express {
 
     // Strict contract validation
     if (!validateDeliveryReport(report)) {
-      console.error(
-        'Delivery report failed contract validation:',
-        validateDeliveryReport.errors,
+      logger.error(
+        { errors: validateDeliveryReport.errors },
+        'Delivery report failed contract validation',
       );
       // We still return it to not break ops, but log the violation
     }
@@ -107,9 +108,9 @@ export function createServer(): Express {
 
     // Validate overall envelope
     if (!validateEventEnvelope(responseEnvelope)) {
-        console.error(
-            'Delivery report envelope failed validation:',
-            validateEventEnvelope.errors,
+        logger.error(
+            { errors: validateEventEnvelope.errors },
+            'Delivery report envelope failed validation',
         );
     }
 
@@ -183,7 +184,7 @@ export function createServer(): Express {
       // Process event (logging + forwarding)
       // Detached execution to not block response, but tracked in pendingFetches inside processEvent
       processEvent({ type: normalizedType, source: normalizedSource, payload }).catch(err => {
-        console.error('Error processing event:', err);
+        logger.error({ err }, 'Error processing event');
       });
 
       res.status(202).json({ status: 'accepted' });
@@ -215,7 +216,7 @@ export function createServer(): Express {
       });
     }
 
-    console.error(err.stack);
+    logger.error({ err }, 'Internal Server Error');
     res.status(500).json({
       status: 'error',
       message: 'Internal Server Error',
@@ -239,21 +240,21 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
     payloadPreview = `${payloadPreview.slice(0, 100)}…`;
   }
 
-  console.log('Received event', {
+  logger.info({
     type,
     source,
     payload: payloadPreview,
-  });
+  }, 'Received event');
 
   // Soft-guard for notification-only events
   if (type === EVENT_INSIGHTS_DAILY_PUBLISHED) {
     const payloadBytes = getPayloadSizeBytes(payload);
     if (payloadBytes === null) {
-      console.warn(
+      logger.warn(
         `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
       );
     } else if (payloadBytes > 1024) {
-      console.warn(
+      logger.warn(
         `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
       );
     }
@@ -269,7 +270,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
       payload,
     });
   } catch (error) {
-    console.error('Failed to serialize event payload for forwarding', error);
+    logger.error({ err: error }, 'Failed to serialize event payload for forwarding');
     return;
   }
 
@@ -313,7 +314,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
           }
 
           if (response.ok) {
-            console.log('Event forwarded', logData);
+            logger.info(logData, 'Event forwarded');
           } else {
             let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
             if (response.status === 401 || response.status === 403) {
@@ -335,7 +336,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
             if (isBestEffortEvent || !isCriticalConsumer) {
               context.log_kind = 'best_effort_forward_failed';
-              console.warn(`[Best-Effort] ${errorMessage}`, context);
+              logger.warn(context, `[Best-Effort] ${errorMessage}`);
             } else {
               saveFailedEvent(
                 {
@@ -345,8 +346,8 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
                 },
                 key,
                 errorMessage,
-              ).catch((e) => console.error('Failed to save failed event', e));
-              console.error(errorMessage, context);
+              ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
+              logger.error(context, errorMessage);
             }
           }
         })
@@ -364,7 +365,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
           if (isBestEffortEvent || !isCriticalConsumer) {
             context.log_kind = 'best_effort_forward_failed';
-            console.warn(`[Best-Effort] ${errorMessage}`, context);
+            logger.warn(context, `[Best-Effort] ${errorMessage}`);
           } else {
             saveFailedEvent(
               {
@@ -374,8 +375,8 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
               },
               key,
               error instanceof Error ? error.message : String(error),
-            ).catch((e) => console.error('Failed to save failed event', e));
-            console.error(errorMessage, context);
+            ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
+            logger.error(context, errorMessage);
           }
         })
         .finally(() => {
@@ -383,7 +384,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
         });
       pendingFetches.add(fetchPromise);
     } catch (error) {
-      console.error(`Failed to initiate forward to ${label}:`, error);
+      logger.error({ err: error }, `Failed to initiate forward to ${label}`);
     }
   });
 }
