@@ -21,7 +21,12 @@ const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
 
-function tryJson(value: unknown): { json: string | undefined | null; error?: unknown } {
+type TryJsonResult =
+  | { json: string; error?: never }
+  | { json: undefined; error?: never }
+  | { json: null; error: unknown };
+
+function tryJson(value: unknown): TryJsonResult {
   try {
     const json = JSON.stringify(value);
     return { json };
@@ -30,14 +35,10 @@ function tryJson(value: unknown): { json: string | undefined | null; error?: unk
   }
 }
 
-function getPayloadSizeBytes(payloadJson: string | undefined | null): number | null {
+function getPayloadSizeBytes(payloadJson: string | null): number | null {
   if (payloadJson === null) {
     return null;
   }
-  if (payloadJson === undefined) {
-    return 0;
-  }
-
   return Buffer.byteLength(payloadJson, 'utf8');
 }
 
@@ -233,7 +234,8 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
   // Normalize undefined payload to null to ensure schema compliance (payload is required)
   const effectivePayload = payload === undefined ? null : payload;
-  const { json: payloadJson, error: serializationError } = tryJson(effectivePayload);
+  const tryJsonResult = tryJson(effectivePayload);
+  const payloadJson = tryJsonResult.json;
 
   let payloadPreview = String(effectivePayload);
 
@@ -253,7 +255,9 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
   // Soft-guard for notification-only events
   if (type === EVENT_INSIGHTS_DAILY_PUBLISHED) {
-    const payloadBytes = getPayloadSizeBytes(payloadJson);
+    // payloadJson cannot be undefined because effectivePayload is normalized to null (so "null" string)
+    // but TS doesn't know effectivePayload can't be undefined/function/symbol here easily without casting
+    const payloadBytes = getPayloadSizeBytes(payloadJson ?? null);
     if (payloadBytes === null) {
       logger.warn(
         `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
@@ -270,12 +274,19 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   let serializedEvent: string;
 
   if (payloadJson === null) {
-    logger.error({ err: serializationError }, 'Failed to serialize event payload for forwarding');
+    // We know error is present because json is null (TryJsonResult)
+    const error = (tryJsonResult as { json: null; error: unknown }).error;
+    logger.error({ err: error }, 'Failed to serialize event payload for forwarding');
     return;
   }
 
   // payloadJson cannot be undefined here because effectivePayload is never undefined
   // (JSON.stringify(null) === "null")
+  if (payloadJson === undefined) {
+      // Should be unreachable given effectivePayload normalization, but good for type safety
+      return;
+  }
+
   serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)},"payload":${payloadJson}}`;
 
   const eventId = randomUUID();
