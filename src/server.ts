@@ -236,7 +236,13 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   let payloadPreview = String(effectivePayload);
 
   if (typeof effectivePayload === 'object' && effectivePayload !== null) {
-    payloadPreview = jsonResult.kind === 'ok' ? jsonResult.json : '[Circular or invalid payload]';
+    if (jsonResult.kind === 'ok') {
+      payloadPreview = jsonResult.json;
+    } else if (jsonResult.kind === 'undefined') {
+      payloadPreview = '[Not JSON-encodable payload]';
+    } else {
+      payloadPreview = '[Circular or invalid payload]';
+    }
   }
 
   if (payloadPreview.length > 100) {
@@ -253,7 +259,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   if (type === EVENT_INSIGHTS_DAILY_PUBLISHED) {
     if (jsonResult.kind !== 'ok') {
       logger.warn(
-        `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
+        `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (not JSON-encodable or circular)`,
       );
     } else {
       const payloadBytes = getPayloadSizeBytes(jsonResult.json);
