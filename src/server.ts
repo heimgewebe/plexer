@@ -21,19 +21,21 @@ const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
 
-function tryJson(value: unknown): { json: string | null } {
+function tryJson(value: unknown): { json: string | undefined | null; error?: unknown } {
   try {
     const json = JSON.stringify(value);
     return { json };
-  } catch {
-    return { json: null };
+  } catch (error) {
+    return { json: null, error };
   }
 }
 
-function getPayloadSizeBytes(payload: unknown): number | null {
-  const payloadJson = tryJson(payload).json;
+function getPayloadSizeBytes(payloadJson: string | undefined | null): number | null {
   if (payloadJson === null) {
     return null;
+  }
+  if (payloadJson === undefined) {
+    return 0;
   }
 
   return Buffer.byteLength(payloadJson, 'utf8');
@@ -229,10 +231,11 @@ export function createServer(): Express {
 export async function processEvent(event: PlexerEvent): Promise<void> {
   const { type, source, payload } = event;
 
+  const { json: payloadJson, error: serializationError } = tryJson(payload);
+
   let payloadPreview = String(payload);
 
   if (typeof payload === 'object' && payload !== null) {
-    const payloadJson = tryJson(payload).json;
     payloadPreview = payloadJson ?? '[Circular or invalid payload]';
   }
 
@@ -248,7 +251,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
   // Soft-guard for notification-only events
   if (type === EVENT_INSIGHTS_DAILY_PUBLISHED) {
-    const payloadBytes = getPayloadSizeBytes(payload);
+    const payloadBytes = getPayloadSizeBytes(payloadJson);
     if (payloadBytes === null) {
       logger.warn(
         `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
@@ -263,15 +266,16 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   // Strict Pass-through: Do not inject 'eventId' or timestamp into the forwarded body.
   // The contract requires the payload to remain untouched.
   let serializedEvent: string;
-  try {
-    serializedEvent = JSON.stringify({
-      type,
-      source,
-      payload,
-    });
-  } catch (error) {
-    logger.error({ err: error }, 'Failed to serialize event payload for forwarding');
+
+  if (payloadJson === null) {
+    logger.error({ err: serializationError }, 'Failed to serialize event payload for forwarding');
     return;
+  }
+
+  if (payloadJson === undefined) {
+    serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)}}`;
+  } else {
+    serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)},"payload":${payloadJson}}`;
   }
 
   const eventId = randomUUID();
