@@ -231,11 +231,13 @@ export function createServer(): Express {
 export async function processEvent(event: PlexerEvent): Promise<void> {
   const { type, source, payload } = event;
 
-  const { json: payloadJson, error: serializationError } = tryJson(payload);
+  // Normalize undefined payload to null to ensure schema compliance (payload is required)
+  const effectivePayload = payload === undefined ? null : payload;
+  const { json: payloadJson, error: serializationError } = tryJson(effectivePayload);
 
-  let payloadPreview = String(payload);
+  let payloadPreview = String(effectivePayload);
 
-  if (typeof payload === 'object' && payload !== null) {
+  if (typeof effectivePayload === 'object' && effectivePayload !== null) {
     payloadPreview = payloadJson ?? '[Circular or invalid payload]';
   }
 
@@ -272,11 +274,9 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
     return;
   }
 
-  if (payloadJson === undefined) {
-    serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)}}`;
-  } else {
-    serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)},"payload":${payloadJson}}`;
-  }
+  // payloadJson cannot be undefined here because effectivePayload is never undefined
+  // (JSON.stringify(null) === "null")
+  serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)},"payload":${payloadJson}}`;
 
   const eventId = randomUUID();
 
