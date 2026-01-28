@@ -307,7 +307,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow(/Invalid RETRY_CONCURRENCY environment variable/);
+      }).toThrow(/^Invalid RETRY_CONCURRENCY environment variable/);
     });
 
     it('rejects floats', () => {
@@ -317,7 +317,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow(/Invalid RETRY_BATCH_SIZE environment variable/);
+      }).toThrow(/^Invalid RETRY_BATCH_SIZE environment variable/);
     });
 
     it('rejects zero', () => {
@@ -327,7 +327,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow(/Invalid RETRY_CONCURRENCY environment variable/);
+      }).toThrow(/^Invalid RETRY_CONCURRENCY environment variable/);
     });
 
     it('rejects negative numbers', () => {
@@ -337,7 +337,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow(/Invalid RETRY_BATCH_SIZE environment variable/);
+      }).toThrow(/^Invalid RETRY_BATCH_SIZE environment variable/);
     });
   });
 });
