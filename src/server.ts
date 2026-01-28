@@ -22,23 +22,20 @@ const MAX_STRING_LENGTH = 256;
 const pendingFetches = new Set<Promise<void>>();
 
 type TryJsonResult =
-  | { json: string; error?: never }
-  | { json: undefined; error?: never }
-  | { json: null; error: unknown };
+  | { kind: 'ok'; json: string }
+  | { kind: 'undefined' }
+  | { kind: 'error'; error: unknown };
 
 function tryJson(value: unknown): TryJsonResult {
   try {
     const json = JSON.stringify(value);
-    return { json };
+    return json === undefined ? { kind: 'undefined' } : { kind: 'ok', json };
   } catch (error) {
-    return { json: null, error };
+    return { kind: 'error', error };
   }
 }
 
-function getPayloadSizeBytes(payloadJson: string | null): number | null {
-  if (payloadJson === null) {
-    return null;
-  }
+function getPayloadSizeBytes(payloadJson: string): number {
   return Buffer.byteLength(payloadJson, 'utf8');
 }
 
@@ -234,13 +231,12 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
   // Normalize undefined payload to null to ensure schema compliance (payload is required)
   const effectivePayload = payload === undefined ? null : payload;
-  const tryJsonResult = tryJson(effectivePayload);
-  const payloadJson = tryJsonResult.json;
+  const jsonResult = tryJson(effectivePayload);
 
   let payloadPreview = String(effectivePayload);
 
   if (typeof effectivePayload === 'object' && effectivePayload !== null) {
-    payloadPreview = payloadJson ?? '[Circular or invalid payload]';
+    payloadPreview = jsonResult.kind === 'ok' ? jsonResult.json : '[Circular or invalid payload]';
   }
 
   if (payloadPreview.length > 100) {
@@ -255,17 +251,17 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
 
   // Soft-guard for notification-only events
   if (type === EVENT_INSIGHTS_DAILY_PUBLISHED) {
-    // payloadJson cannot be undefined because effectivePayload is normalized to null (so "null" string)
-    // but TS doesn't know effectivePayload can't be undefined/function/symbol here easily without casting
-    const payloadBytes = getPayloadSizeBytes(payloadJson ?? null);
-    if (payloadBytes === null) {
+    if (jsonResult.kind !== 'ok') {
       logger.warn(
         `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload size could not be computed (non-serializable payload)`,
       );
-    } else if (payloadBytes > 1024) {
-      logger.warn(
-        `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
-      );
+    } else {
+      const payloadBytes = getPayloadSizeBytes(jsonResult.json);
+      if (payloadBytes > 1024) {
+        logger.warn(
+          `::warning:: ${EVENT_INSIGHTS_DAILY_PUBLISHED} payload exceeds 1KB notification-only limit (bytes=${payloadBytes})`,
+        );
+      }
     }
   }
 
@@ -273,21 +269,21 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   // The contract requires the payload to remain untouched (except normalization of undefined to null for schema compliance).
   let serializedEvent: string;
 
-  if (payloadJson === null) {
-    // We know error is present because json is null (TryJsonResult)
-    const error = (tryJsonResult as { json: null; error: unknown }).error;
-    logger.error({ err: error }, 'Failed to serialize event payload for forwarding');
+  if (jsonResult.kind === 'error') {
+    logger.error({ err: jsonResult.error }, 'Failed to serialize event payload for forwarding');
     return;
   }
 
-  // payloadJson cannot be undefined here because effectivePayload is never undefined
-  // (JSON.stringify(null) === "null")
-  if (payloadJson === undefined) {
-      // Should be unreachable given effectivePayload normalization, but good for type safety
-      return;
+  if (jsonResult.kind === 'undefined') {
+    // This happens if payload contains non-serializable types like functions or symbols
+    logger.error(
+      { payloadType: typeof effectivePayload },
+      'Payload serialized to undefined; dropping event to preserve contract semantics',
+    );
+    return;
   }
 
-  serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)},"payload":${payloadJson}}`;
+  serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)},"payload":${jsonResult.json}}`;
 
   const eventId = randomUUID();
 
