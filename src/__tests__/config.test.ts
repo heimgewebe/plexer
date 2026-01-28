@@ -10,7 +10,12 @@ describe('config', () => {
       }
     }
     for (const key of Object.keys(originalEnv)) {
-      process.env[key] = originalEnv[key];
+      const value = originalEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
     jest.resetModules();
   });
