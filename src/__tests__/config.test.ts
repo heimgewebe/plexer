@@ -2,7 +2,16 @@ describe('config', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
-    process.env = { ...originalEnv };
+    // Restore env vars preserving object identity
+    const currentKeys = Object.keys(process.env);
+    for (const key of currentKeys) {
+      if (!Object.prototype.hasOwnProperty.call(originalEnv, key)) {
+        delete process.env[key];
+      }
+    }
+    for (const key of Object.keys(originalEnv)) {
+      process.env[key] = originalEnv[key];
+    }
     jest.resetModules();
   });
 
@@ -253,16 +262,6 @@ describe('config', () => {
   });
 
   describe('Retry Configuration', () => {
-    let retryEnv: NodeJS.ProcessEnv;
-
-    beforeEach(() => {
-      retryEnv = { ...process.env };
-    });
-
-    afterEach(() => {
-      process.env = retryEnv;
-    });
-
     it('uses defaults when env vars are not set', () => {
       delete process.env.RETRY_CONCURRENCY;
       delete process.env.RETRY_BATCH_SIZE;
