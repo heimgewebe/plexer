@@ -266,7 +266,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   }
 
   // Strict Pass-through: Do not inject 'eventId' or timestamp into the forwarded body.
-  // The contract requires the payload to remain untouched.
+  // The contract requires the payload to remain untouched (except normalization of undefined to null for schema compliance).
   let serializedEvent: string;
 
   if (payloadJson === null) {
