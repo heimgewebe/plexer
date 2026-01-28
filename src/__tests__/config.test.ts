@@ -2,7 +2,21 @@ describe('config', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
-    process.env = { ...originalEnv };
+    // Restore env vars preserving object identity
+    const currentKeys = Object.keys(process.env);
+    for (const key of currentKeys) {
+      if (!Object.prototype.hasOwnProperty.call(originalEnv, key)) {
+        delete process.env[key];
+      }
+    }
+    for (const key of Object.keys(originalEnv)) {
+      const value = originalEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     jest.resetModules();
   });
 
@@ -293,7 +307,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow('Invalid RETRY_CONCURRENCY environment variable');
+      }).toThrow(/^Invalid RETRY_CONCURRENCY environment variable/);
     });
 
     it('rejects floats', () => {
@@ -303,7 +317,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow('Invalid RETRY_BATCH_SIZE environment variable');
+      }).toThrow(/^Invalid RETRY_BATCH_SIZE environment variable/);
     });
 
     it('rejects zero', () => {
@@ -313,7 +327,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow('Invalid RETRY_CONCURRENCY environment variable');
+      }).toThrow(/^Invalid RETRY_CONCURRENCY environment variable/);
     });
 
     it('rejects negative numbers', () => {
@@ -323,7 +337,7 @@ describe('config', () => {
         jest.isolateModules(() => {
           require('../config');
         });
-      }).toThrow('Invalid RETRY_BATCH_SIZE environment variable');
+      }).toThrow(/^Invalid RETRY_BATCH_SIZE environment variable/);
     });
   });
 });
