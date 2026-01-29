@@ -229,7 +229,8 @@ export function createServer(): Express {
 export async function processEvent(event: PlexerEvent): Promise<void> {
   const { type, source, payload } = event;
 
-  // Normalize undefined payload to null to ensure schema compliance (payload is required)
+  // Normalize undefined payload to null to keep a stable event shape (payload is required).
+  // Note: JSON.stringify can still return undefined for values like functions/symbols.
   const effectivePayload = payload === undefined ? null : payload;
   const jsonResult = tryJson(effectivePayload);
 

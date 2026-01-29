@@ -679,6 +679,9 @@ describe('Server', () => {
     });
 
     it('should drop and log error for events with non-JSON-encodable payloads (e.g. functions)', async () => {
+      // Ensure mock state is clean for this test
+      fetchMock.mockClear();
+
       // We can't send a function over HTTP JSON, so we have to bypass supertest/express body parsing
       // and call processEvent directly to test this edge case in the logic layer.
       const payloadWithFunction = {
