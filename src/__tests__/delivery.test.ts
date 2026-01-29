@@ -358,5 +358,24 @@ describe('Delivery Reliability', () => {
         expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
         expect(mockLockRelease).toHaveBeenCalled();
     });
+
+    it('should handle pipeline failure during orphan recovery', async () => {
+        mockReaddir.mockResolvedValue(['processing.123.jsonl']);
+        mockPipeline.mockRejectedValueOnce(new Error('Pipeline error'));
+
+        await initDelivery();
+
+        // Lock -> Pipeline Error -> Log Error -> Unlock (No Unlink)
+        expect(mockLock).toHaveBeenCalled();
+        expect(mockPipeline).toHaveBeenCalled();
+
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ err: expect.any(Error) }),
+            expect.stringContaining('Failed to recover orphaned file')
+        );
+
+        expect(mockUnlink).not.toHaveBeenCalled();
+        expect(mockLockRelease).toHaveBeenCalled();
+    });
   });
 });
