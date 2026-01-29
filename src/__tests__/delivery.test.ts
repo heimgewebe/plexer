@@ -341,11 +341,12 @@ describe('Delivery Reliability', () => {
 
   describe('initDelivery', () => {
     beforeEach(() => {
-       mockCreateReadStream.mockReturnValue(Readable.from([]));
-       mockCreateWriteStream.mockReturnValue(new Writable({ write: (c, e, cb) => cb() }));
        mockPipeline.mockClear();
        mockCreateReadStream.mockClear();
        mockCreateWriteStream.mockClear();
+
+       mockCreateReadStream.mockReturnValue(Readable.from(['x']));
+       mockCreateWriteStream.mockReturnValue(new Writable({ write: (c, e, cb) => cb() }));
     });
 
     it('should recover orphaned processing files', async () => {
