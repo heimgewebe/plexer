@@ -118,8 +118,8 @@ describe('Delivery Reliability', () => {
       destroy: jest.fn(),
     };
     mockCreateReadStream.mockReturnValue(mockStream);
-    // Mock createWriteStream to return a dummy object
-    mockCreateWriteStream.mockReturnValue({});
+    // Mock createWriteStream to return a valid Writable stub to avoid misleading tests
+    mockCreateWriteStream.mockReturnValue(new Writable({ write: (c, e, cb) => cb() }));
 
     mockRl = {
       on: jest.fn(),
@@ -244,7 +244,7 @@ describe('Delivery Reliability', () => {
       );
       expect(mockPipeline).toHaveBeenCalled();
 
-      // Inspect streamed content
+      // Inspect streamed content (Source-side verification since pipeline is mocked)
       const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
       const readable = lastPipelineCall[0] as Readable;
       const chunks = [];
@@ -280,7 +280,7 @@ describe('Delivery Reliability', () => {
       );
       expect(mockPipeline).toHaveBeenCalled();
 
-      // Inspect streamed content
+      // Inspect streamed content (Source-side verification since pipeline is mocked)
       const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
       const readable = lastPipelineCall[0] as Readable;
       const chunks = [];
@@ -317,7 +317,7 @@ describe('Delivery Reliability', () => {
         expect.any(Object),
       );
 
-      // Find the pipeline call
+      // Inspect streamed content (Source-side verification since pipeline is mocked)
       const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
       const readable = lastPipelineCall[0] as Readable;
       const chunks = [];
