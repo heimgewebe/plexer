@@ -111,6 +111,8 @@ export async function initDelivery(): Promise<void> {
         for (const file of processingFiles) {
           const filePath = path.join(dataDir, file);
           try {
+            // Crash-recovery should be byte-preserving: append orphaned JSONL as-is.
+            // We intentionally stream Buffers (no encoding) to avoid re-encoding/transcoding.
             await pipeline(
               createReadStream(filePath),
               createWriteStream(failedLog, { flags: 'a' })
