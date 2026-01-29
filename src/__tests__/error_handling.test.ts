@@ -15,6 +15,7 @@ jest.mock('../config', () => ({
 
 // Mock delivery to avoid side effects
 jest.mock('../delivery', () => ({
+  __esModule: true,
   saveFailedEvent: jest.fn().mockResolvedValue(undefined),
   getDeliveryMetrics: jest.fn(),
   retryFailedEvents: jest.fn().mockResolvedValue(undefined),
@@ -51,7 +52,8 @@ describe('Error Handling', () => {
   it('should return 500 when an unhandled exception occurs in a dependency', async () => {
     // We can simulate an internal error by mocking the route logic or causing a crash
     // Since we mocked validateEventEnvelope, we can make it throw
-    (delivery.validateEventEnvelope as unknown as jest.Mock).mockImplementationOnce(() => {
+    const mockValidate = delivery.validateEventEnvelope as jest.MockedFunction<typeof delivery.validateEventEnvelope>;
+    mockValidate.mockImplementationOnce(() => {
       throw new Error('Simulated Crash');
     });
 
