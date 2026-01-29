@@ -2,6 +2,7 @@
 import fsPromises from 'fs/promises';
 import fs from 'fs';
 import readline from 'readline';
+import { Readable, Writable } from 'stream';
 import { lock } from 'proper-lockfile';
 
 /**
@@ -25,9 +26,15 @@ jest.mock('fs/promises', () => ({
   stat: jest.fn(),
 }));
 
-// Mock fs (createReadStream)
+// Mock fs (createReadStream, createWriteStream)
 jest.mock('fs', () => ({
   createReadStream: jest.fn(),
+  createWriteStream: jest.fn(),
+}));
+
+// Mock stream/promises
+jest.mock('stream/promises', () => ({
+  pipeline: jest.fn(),
 }));
 
 // Mock readline
@@ -82,6 +89,8 @@ describe('Delivery Reliability', () => {
   const mockStat = fsPromises.stat as jest.Mock;
 
   const mockCreateReadStream = fs.createReadStream as jest.Mock;
+  const mockCreateWriteStream = fs.createWriteStream as jest.Mock;
+  const mockPipeline = require('stream/promises').pipeline as jest.Mock;
   const mockCreateInterface = readline.createInterface as jest.Mock;
   const mockLock = lock as jest.Mock;
 
@@ -331,20 +340,52 @@ describe('Delivery Reliability', () => {
   });
 
   describe('initDelivery', () => {
+    beforeEach(() => {
+       mockPipeline.mockClear();
+       mockCreateReadStream.mockClear();
+       mockCreateWriteStream.mockClear();
+
+       mockCreateReadStream.mockReturnValue(Readable.from(['x']));
+       mockCreateWriteStream.mockReturnValue(new Writable({ write: (c, e, cb) => cb() }));
+    });
+
     it('should recover orphaned processing files', async () => {
         mockReaddir.mockResolvedValue(['processing.123.jsonl']);
-        mockReadFile.mockResolvedValue('{"some":"data"}\n');
+        mockPipeline.mockResolvedValue(undefined);
 
         await initDelivery();
 
         // Lock -> Read orphan -> Append to failed log -> Unlink orphan -> Unlock
         expect(mockLock).toHaveBeenCalled();
-        expect(mockReadFile).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'), 'utf8');
-        expect(mockAppendFile).toHaveBeenCalledWith(
+
+        expect(mockCreateReadStream).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
+        expect(mockCreateWriteStream).toHaveBeenCalledWith(
             expect.stringContaining('failed_forwards.jsonl'),
-            '{"some":"data"}\n'
+            { flags: 'a' }
         );
+        expect(mockPipeline).toHaveBeenCalled();
+
         expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
+        expect(mockLockRelease).toHaveBeenCalled();
+    });
+
+    it('should handle pipeline failure during orphan recovery', async () => {
+        (logger.error as jest.Mock).mockClear();
+        mockReaddir.mockResolvedValue(['processing.123.jsonl']);
+        mockPipeline.mockRejectedValueOnce(new Error('Pipeline error'));
+
+        await initDelivery();
+
+        // Lock -> Pipeline Error -> Log Error -> Unlock (No Unlink)
+        expect(mockLock).toHaveBeenCalled();
+        expect(mockPipeline).toHaveBeenCalled();
+
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ err: expect.any(Error) }),
+            expect.stringContaining('Failed to recover orphaned file')
+        );
+
+        expect(mockUnlink).not.toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
         expect(mockLockRelease).toHaveBeenCalled();
     });
   });
