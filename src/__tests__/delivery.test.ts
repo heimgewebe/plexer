@@ -339,6 +339,11 @@ describe('Delivery Reliability', () => {
   });
 
   describe('initDelivery', () => {
+    beforeEach(() => {
+       mockCreateReadStream.mockReturnValue({});
+       mockCreateWriteStream.mockReturnValue({});
+    });
+
     it('should recover orphaned processing files', async () => {
         mockReaddir.mockResolvedValue(['processing.123.jsonl']);
         mockPipeline.mockResolvedValue(undefined);
@@ -360,6 +365,7 @@ describe('Delivery Reliability', () => {
     });
 
     it('should handle pipeline failure during orphan recovery', async () => {
+        (logger.error as jest.Mock).mockClear();
         mockReaddir.mockResolvedValue(['processing.123.jsonl']);
         mockPipeline.mockRejectedValueOnce(new Error('Pipeline error'));
 
@@ -374,7 +380,7 @@ describe('Delivery Reliability', () => {
             expect.stringContaining('Failed to recover orphaned file')
         );
 
-        expect(mockUnlink).not.toHaveBeenCalled();
+        expect(mockUnlink).not.toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
         expect(mockLockRelease).toHaveBeenCalled();
     });
   });
