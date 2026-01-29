@@ -2,6 +2,7 @@
 import fsPromises from 'fs/promises';
 import fs from 'fs';
 import readline from 'readline';
+import { Readable, Writable } from 'stream';
 import { lock } from 'proper-lockfile';
 
 /**
@@ -340,8 +341,11 @@ describe('Delivery Reliability', () => {
 
   describe('initDelivery', () => {
     beforeEach(() => {
-       mockCreateReadStream.mockReturnValue({});
-       mockCreateWriteStream.mockReturnValue({});
+       mockCreateReadStream.mockReturnValue(Readable.from([]));
+       mockCreateWriteStream.mockReturnValue(new Writable({ write: (c, e, cb) => cb() }));
+       mockPipeline.mockClear();
+       mockCreateReadStream.mockClear();
+       mockCreateWriteStream.mockClear();
     });
 
     it('should recover orphaned processing files', async () => {
