@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { createServer } from '../server';
-import { validateEventEnvelope } from '../delivery';
+import * as delivery from '../delivery';
 
 // Mock config
 jest.mock('../config', () => ({
@@ -48,10 +48,10 @@ describe('Error Handling', () => {
     });
   });
 
-  it('should return 500 for actual internal errors', async () => {
+  it('should return 500 when an unhandled exception occurs in a dependency', async () => {
     // We can simulate an internal error by mocking the route logic or causing a crash
     // Since we mocked validateEventEnvelope, we can make it throw
-    (validateEventEnvelope as unknown as jest.Mock).mockImplementationOnce(() => {
+    (delivery.validateEventEnvelope as unknown as jest.Mock).mockImplementationOnce(() => {
       throw new Error('Simulated Crash');
     });
 
