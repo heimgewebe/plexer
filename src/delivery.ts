@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import { createReadStream, createWriteStream } from 'fs';
+import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import readline from 'readline';
 import path from 'path';
@@ -428,17 +429,26 @@ export async function retryFailedEvents(): Promise<void> {
 }
 
 async function batchAppendEvents(entries: FailedEvent[]) {
-    const lines = entries.map(e => JSON.stringify(e)).join('\n') + '\n';
-    let release;
-    try {
-        release = await lock(getLockFilePath(), { retries: 3 });
-        await fs.appendFile(getFailedLogPath(), lines, 'utf8');
-    } catch(e) {
-        // Re-throw to prevent processing file deletion
-        throw e;
-    } finally {
-        if(release) await release();
+  // Stream-based implementation to avoid memory spike from large string concatenation
+  const iterator = function* () {
+    for (const entry of entries) {
+      yield JSON.stringify(entry) + '\n';
     }
+  };
+
+  let release;
+  try {
+    release = await lock(getLockFilePath(), { retries: 3 });
+    await pipeline(
+      Readable.from(iterator()),
+      createWriteStream(getFailedLogPath(), { flags: 'a', encoding: 'utf8' }),
+    );
+  } catch (e) {
+    // Re-throw to prevent processing file deletion
+    throw e;
+  } finally {
+    if (release) await release();
+  }
 }
 
 export function getDeliveryMetrics(pendingCount: number): PlexerDeliveryReport {

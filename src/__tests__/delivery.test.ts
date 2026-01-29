@@ -118,6 +118,8 @@ describe('Delivery Reliability', () => {
       destroy: jest.fn(),
     };
     mockCreateReadStream.mockReturnValue(mockStream);
+    // Mock createWriteStream to return a dummy object
+    mockCreateWriteStream.mockReturnValue({});
 
     mockRl = {
       on: jest.fn(),
@@ -236,38 +238,56 @@ describe('Delivery Reliability', () => {
       expect(mockFetch).toHaveBeenCalled();
 
       // Should re-append with incremented retry count
-      expect(mockAppendFile).toHaveBeenCalledWith(
+      expect(mockCreateWriteStream).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
-        expect.stringContaining('"retryCount":1'),
-        'utf8'
+        expect.objectContaining({ flags: 'a', encoding: 'utf8' }),
       );
+      expect(mockPipeline).toHaveBeenCalled();
+
+      // Inspect streamed content
+      const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
+      const readable = lastPipelineCall[0] as Readable;
+      const chunks = [];
+      for await (const chunk of readable) chunks.push(chunk);
+      const content = chunks.join('');
+
+      expect(content).toContain('"retryCount":1');
 
       // Cleanup
       expect(mockUnlink).toHaveBeenCalled();
     });
 
     it('should requeue future events without attempting fetch', async () => {
-        const futureEvent = {
-            consumerKey: 'test-consumer',
-            event: { type: 't', source: 's', payload: {} },
-            retryCount: 0,
-            nextAttempt: new Date(Date.now() + 100000).toISOString(), // Future
-            lastAttempt: new Date().toISOString(),
-            error: 'prev error'
-          };
+      const futureEvent = {
+        consumerKey: 'test-consumer',
+        event: { type: 't', source: 's', payload: {} },
+        retryCount: 0,
+        nextAttempt: new Date(Date.now() + 100000).toISOString(), // Future
+        lastAttempt: new Date().toISOString(),
+        error: 'prev error',
+      };
 
-          mockReadLines([JSON.stringify(futureEvent)]);
+      mockReadLines([JSON.stringify(futureEvent)]);
 
-          await retryFailedEvents();
+      await retryFailedEvents();
 
-          expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
 
-          // Should re-append unchanged (or at least preserved)
-          expect(mockAppendFile).toHaveBeenCalledWith(
-            expect.stringContaining('failed_forwards.jsonl'),
-            expect.stringContaining('"retryCount":0'),
-            'utf8'
-          );
+      // Should re-append unchanged (or at least preserved)
+      expect(mockCreateWriteStream).toHaveBeenCalledWith(
+        expect.stringContaining('failed_forwards.jsonl'),
+        expect.objectContaining({ flags: 'a', encoding: 'utf8' }),
+      );
+      expect(mockPipeline).toHaveBeenCalled();
+
+      // Inspect streamed content
+      const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
+      const readable = lastPipelineCall[0] as Readable;
+      const chunks = [];
+      for await (const chunk of readable) chunks.push(chunk);
+      const content = chunks.join('');
+
+      expect(content).toContain('"retryCount":0');
     });
 
     it('should ensure nextAttempt is strictly in the future after a failed retry', async () => {
@@ -278,7 +298,7 @@ describe('Delivery Reliability', () => {
         retryCount: 0,
         nextAttempt: new Date(now - 1000).toISOString(), // Due
         lastAttempt: new Date().toISOString(),
-        error: 'prev error'
+        error: 'prev error',
       };
 
       mockReadLines([JSON.stringify(dueEvent)]);
@@ -287,17 +307,24 @@ describe('Delivery Reliability', () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
-        statusText: 'Internal Error'
+        statusText: 'Internal Error',
       });
 
       await retryFailedEvents();
 
-      // Find the call that re-queued the event
-      const appendCalls = mockAppendFile.mock.calls;
-      const failedLogCall = appendCalls.find((args: any[]) => args[0].includes('failed_forwards.jsonl'));
+      expect(mockCreateWriteStream).toHaveBeenCalledWith(
+        expect.stringContaining('failed_forwards.jsonl'),
+        expect.any(Object),
+      );
 
-      expect(failedLogCall).toBeDefined();
-      const savedLines = failedLogCall[1].trim().split('\n');
+      // Find the pipeline call
+      const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
+      const readable = lastPipelineCall[0] as Readable;
+      const chunks = [];
+      for await (const chunk of readable) chunks.push(chunk);
+      const content = chunks.join('');
+
+      const savedLines = content.trim().split('\n');
       const savedEvent = JSON.parse(savedLines[0]); // Should be the only event
 
       const nextAttemptTime = new Date(savedEvent.nextAttempt).getTime();
