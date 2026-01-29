@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
-import { createReadStream } from 'fs';
+import { createReadStream, createWriteStream } from 'fs';
+import { pipeline } from 'stream/promises';
 import readline from 'readline';
 import path from 'path';
 import { randomUUID } from 'crypto';
@@ -110,9 +111,10 @@ export async function initDelivery(): Promise<void> {
         for (const file of processingFiles) {
           const filePath = path.join(dataDir, file);
           try {
-            const content = await fs.readFile(filePath, 'utf8');
-            // Append content directly
-            await fs.appendFile(failedLog, content);
+            await pipeline(
+              createReadStream(filePath),
+              createWriteStream(failedLog, { flags: 'a' })
+            );
             await fs.unlink(filePath);
           } catch (e) {
             logger.error({ err: e, file }, `Failed to recover orphaned file ${file}`);
