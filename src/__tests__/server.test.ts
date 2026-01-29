@@ -552,6 +552,7 @@ describe('Server', () => {
       });
 
       // Verify that we are not trying to act as a file host (payload should be small)
+      // The payload must be serializable for this test to pass logically
       expect(JSON.stringify(payload.payload).length).toBeLessThan(1000);
 
       // Verify URL pattern matches the stable release asset location (not 'latest')
@@ -675,6 +676,32 @@ describe('Server', () => {
       expect(logger.error).not.toHaveBeenCalled();
       // Verify "Event forwarded" success log is NOT called
       expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Event forwarded');
+    });
+
+    it('should drop and log error for events with non-JSON-encodable payloads (e.g. functions)', async () => {
+      // Ensure mock state is clean for this test
+      fetchMock.mockClear();
+
+      // We can't send a function over HTTP JSON, so we have to bypass supertest/express body parsing
+      // and call processEvent directly to test this edge case in the logic layer.
+      const payloadWithFunction = {
+        type: 'test.unsafe',
+        source: 'test',
+        payload: () => {}, // JSON.stringify returns undefined
+      };
+
+      // @ts-ignore - explicitly testing invalid payload type
+      await processEvent(payloadWithFunction);
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payloadType: 'function',
+        }),
+        expect.stringContaining('Payload serialized to undefined; dropping event')
+      );
+
+      // Verify no fetch was attempted
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 
