@@ -1,6 +1,6 @@
-
 import request from 'supertest';
 import { createServer } from '../server';
+import { validateEventEnvelope } from '../delivery';
 
 // Mock config
 jest.mock('../config', () => ({
@@ -18,6 +18,8 @@ jest.mock('../delivery', () => ({
   saveFailedEvent: jest.fn().mockResolvedValue(undefined),
   getDeliveryMetrics: jest.fn(),
   retryFailedEvents: jest.fn().mockResolvedValue(undefined),
+  validateEventEnvelope: jest.fn().mockReturnValue(true),
+  validateDeliveryReport: jest.fn().mockReturnValue(true),
 }));
 
 describe('Error Handling', () => {
@@ -48,9 +50,24 @@ describe('Error Handling', () => {
 
   it('should return 500 for actual internal errors', async () => {
     // We can simulate an internal error by mocking the route logic or causing a crash
-    // But since we can't easily inject a crash into the existing route without modifying it,
-    // we can rely on the fact that the existing tests cover happy paths.
-    // To test 500, we might need to mock express.json() to throw a non-status error, or similar.
-    // However, for this test suite, testing the JSON parse error is the main goal.
+    // Since we mocked validateEventEnvelope, we can make it throw
+    (validateEventEnvelope as unknown as jest.Mock).mockImplementationOnce(() => {
+      throw new Error('Simulated Crash');
+    });
+
+    const response = await request(app)
+      .post('/events')
+      .set('Content-Type', 'application/json')
+      .send({
+        type: 'test.event',
+        source: 'test',
+        payload: { foo: 'bar' }
+      });
+
+    expect(response.status).toBe(500);
+    expect(response.body).toEqual({
+      status: 'error',
+      message: 'Internal Server Error',
+    });
   });
 });
