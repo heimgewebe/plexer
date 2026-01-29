@@ -247,7 +247,9 @@ describe('Delivery Reliability', () => {
       expect(mockPipeline).toHaveBeenCalled();
 
       // Inspect streamed content (Source-side verification since pipeline is mocked)
-      const pipelineCall = mockPipeline.mock.calls.find((call: any[]) => call[1] === mockDestStream);
+      // Use filter + pop to get the LAST call associated with our dest stream
+      const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
+      const pipelineCall = pipelineCalls.pop(); // Get last call
       expect(pipelineCall).toBeDefined();
       const readable = pipelineCall[0] as Readable;
       const chunks = [];
