@@ -76,6 +76,7 @@ describe('Delivery Reliability', () => {
   let mockStream: any;
   let mockRl: any;
   let mockLockRelease: any;
+  let mockDestStream: Writable;
 
   // Access mocks
   const mockAppendFile = fsPromises.appendFile as jest.Mock;
@@ -119,7 +120,8 @@ describe('Delivery Reliability', () => {
     };
     mockCreateReadStream.mockReturnValue(mockStream);
     // Mock createWriteStream to return a valid Writable stub to avoid misleading tests
-    mockCreateWriteStream.mockReturnValue(new Writable({ write: (c, e, cb) => cb() }));
+    mockDestStream = new Writable({ write: (c, e, cb) => cb() });
+    mockCreateWriteStream.mockReturnValue(mockDestStream);
 
     mockRl = {
       on: jest.fn(),
@@ -245,8 +247,9 @@ describe('Delivery Reliability', () => {
       expect(mockPipeline).toHaveBeenCalled();
 
       // Inspect streamed content (Source-side verification since pipeline is mocked)
-      const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
-      const readable = lastPipelineCall[0] as Readable;
+      const pipelineCall = mockPipeline.mock.calls.find((call: any[]) => call[1] === mockDestStream);
+      expect(pipelineCall).toBeDefined();
+      const readable = pipelineCall[0] as Readable;
       const chunks = [];
       for await (const chunk of readable) chunks.push(chunk);
       const content = chunks.join('');
@@ -281,8 +284,9 @@ describe('Delivery Reliability', () => {
       expect(mockPipeline).toHaveBeenCalled();
 
       // Inspect streamed content (Source-side verification since pipeline is mocked)
-      const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
-      const readable = lastPipelineCall[0] as Readable;
+      const pipelineCall = mockPipeline.mock.calls.find((call: any[]) => call[1] === mockDestStream);
+      expect(pipelineCall).toBeDefined();
+      const readable = pipelineCall[0] as Readable;
       const chunks = [];
       for await (const chunk of readable) chunks.push(chunk);
       const content = chunks.join('');
@@ -318,8 +322,9 @@ describe('Delivery Reliability', () => {
       );
 
       // Inspect streamed content (Source-side verification since pipeline is mocked)
-      const lastPipelineCall = mockPipeline.mock.calls[mockPipeline.mock.calls.length - 1];
-      const readable = lastPipelineCall[0] as Readable;
+      const pipelineCall = mockPipeline.mock.calls.find((call: any[]) => call[1] === mockDestStream);
+      expect(pipelineCall).toBeDefined();
+      const readable = pipelineCall[0] as Readable;
       const chunks = [];
       for await (const chunk of readable) chunks.push(chunk);
       const content = chunks.join('');
