@@ -24,7 +24,6 @@ jest.mock('fs/promises', () => ({
   readFile: jest.fn(),
   mkdir: jest.fn(),
   stat: jest.fn(),
-  link: jest.fn(),
   copyFile: jest.fn(),
 }));
 
@@ -90,7 +89,6 @@ describe('Delivery Reliability', () => {
   const mockReadFile = fsPromises.readFile as jest.Mock;
   const mockMkdir = fsPromises.mkdir as jest.Mock;
   const mockStat = fsPromises.stat as jest.Mock;
-  const mockLink = fsPromises.link as jest.Mock;
   const mockCopyFile = fsPromises.copyFile as jest.Mock;
 
   const mockCreateReadStream = fs.createReadStream as jest.Mock;
@@ -112,7 +110,6 @@ describe('Delivery Reliability', () => {
     mockRename.mockResolvedValue(undefined);
     mockUnlink.mockResolvedValue(undefined);
     mockReadFile.mockResolvedValue('');
-    mockLink.mockResolvedValue(undefined);
     mockCopyFile.mockResolvedValue(undefined);
 
     // Setup proper-lockfile
