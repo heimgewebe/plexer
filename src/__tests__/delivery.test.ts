@@ -464,6 +464,7 @@ describe('Delivery Reliability', () => {
         (logger.error as jest.Mock).mockClear();
         mockUnlink.mockClear();
         mockCreateReadStream.mockClear();
+        mockCopyFile.mockClear();
 
         mockReaddir.mockResolvedValue([]);
         mockAccess.mockResolvedValue(undefined);
@@ -495,6 +496,36 @@ describe('Delivery Reliability', () => {
 
         // Should ensure lock is released
         expect(mockLockRelease).toHaveBeenCalled();
+    });
+
+    it('should handle lock failure gracefully', async () => {
+        // Clear mocks
+        (logger.error as jest.Mock).mockClear();
+        mockCopyFile.mockClear();
+        mockLockRelease.mockClear();
+
+        mockReaddir.mockResolvedValue([]);
+        mockAccess.mockResolvedValue(undefined);
+
+        // Lock fails
+        mockLock.mockRejectedValueOnce(new Error('Lock contention'));
+
+        await initDelivery();
+
+        // Should try lock
+        expect(mockLock).toHaveBeenCalled();
+
+        // Should NOT copy
+        expect(mockCopyFile).not.toHaveBeenCalled();
+
+        // Should log error
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ err: expect.any(Error) }),
+            expect.stringContaining('Failed to lock or copy FAILED_LOG')
+        );
+
+        // Should NOT release lock (it wasn't acquired)
+        expect(mockLockRelease).not.toHaveBeenCalled();
     });
   });
 });
