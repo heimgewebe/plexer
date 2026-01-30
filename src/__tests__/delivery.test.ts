@@ -451,6 +451,10 @@ describe('Delivery Reliability', () => {
         expect(mockCreateReadStream).toHaveBeenCalledWith(
             expect.stringContaining('snapshot.')
         );
+        // Should NOT read from the source file directly (metrics scan)
+        expect(mockCreateReadStream).not.toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.jsonl')
+        );
 
         // Should release lock
         expect(mockLockRelease).toHaveBeenCalled();
@@ -502,7 +506,7 @@ describe('Delivery Reliability', () => {
         // Clear mocks
         (logger.error as jest.Mock).mockClear();
         mockCopyFile.mockClear();
-        mockLockRelease.mockClear();
+        mockLockRelease?.mockClear?.();
 
         mockReaddir.mockResolvedValue([]);
         mockAccess.mockResolvedValue(undefined);
@@ -512,8 +516,11 @@ describe('Delivery Reliability', () => {
 
         await initDelivery();
 
-        // Should try lock
-        expect(mockLock).toHaveBeenCalled();
+        // Should try lock with specific options
+        expect(mockLock).toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.lock'),
+            expect.objectContaining({ retries: 3 })
+        );
 
         // Should NOT copy
         expect(mockCopyFile).not.toHaveBeenCalled();
