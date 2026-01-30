@@ -134,32 +134,49 @@ export async function initDelivery(): Promise<void> {
     // Ensure FAILED_LOG exists for reading
     try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
 
-    let releaseScan;
     let lineCount = 0;
     let minNext = Infinity;
     const now = Date.now();
     let rNow = 0;
+    let snapshotPath: string | null = null;
 
     try {
-      // Lock for read to support multi-instance / safe startup
-      releaseScan = await lock(lockFile, { retries: 3 });
-
-      for await (const line of readLinesSafe(failedLog)) {
-        if (!line.trim()) continue;
-        lineCount++;
+      // Lock just to snapshot the file
+      let releaseScan;
+      try {
+        releaseScan = await lock(lockFile, { retries: 3 });
+        snapshotPath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
+        // Use hard link for instant snapshot
         try {
-          const e = JSON.parse(line) as FailedEvent;
-          const n = new Date(e.nextAttempt).getTime();
-          if (!isNaN(n)) {
-            if (n < minNext) minNext = n;
-            if (n <= now) rNow++;
-          }
-        } catch {}
+          await fs.link(failedLog, snapshotPath);
+        } catch (e) {
+          // Fallback to copy if link fails (e.g. cross-device)
+          await fs.copyFile(failedLog, snapshotPath);
+        }
+      } finally {
+        if (releaseScan) await releaseScan();
+      }
+
+      if (snapshotPath) {
+        for await (const line of readLinesSafe(snapshotPath)) {
+          if (!line.trim()) continue;
+          lineCount++;
+          try {
+            const e = JSON.parse(line) as FailedEvent;
+            const n = new Date(e.nextAttempt).getTime();
+            if (!isNaN(n)) {
+              if (n < minNext) minNext = n;
+              if (n <= now) rNow++;
+            }
+          } catch {}
+        }
       }
     } catch (e) {
-      logger.error({ err: e }, 'Failed to lock/read FAILED_LOG during metrics scan');
+      logger.error({ err: e }, 'Failed during metrics scan initialization');
     } finally {
-      if (releaseScan) await releaseScan();
+      if (snapshotPath) {
+        try { await fs.unlink(snapshotPath); } catch {}
+      }
     }
 
     failedCount = lineCount;

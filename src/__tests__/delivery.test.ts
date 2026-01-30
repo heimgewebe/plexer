@@ -24,6 +24,8 @@ jest.mock('fs/promises', () => ({
   readFile: jest.fn(),
   mkdir: jest.fn(),
   stat: jest.fn(),
+  link: jest.fn(),
+  copyFile: jest.fn(),
 }));
 
 // Mock fs (createReadStream, createWriteStream)
@@ -88,6 +90,8 @@ describe('Delivery Reliability', () => {
   const mockReadFile = fsPromises.readFile as jest.Mock;
   const mockMkdir = fsPromises.mkdir as jest.Mock;
   const mockStat = fsPromises.stat as jest.Mock;
+  const mockLink = fsPromises.link as jest.Mock;
+  const mockCopyFile = fsPromises.copyFile as jest.Mock;
 
   const mockCreateReadStream = fs.createReadStream as jest.Mock;
   const mockCreateWriteStream = fs.createWriteStream as jest.Mock;
@@ -108,6 +112,8 @@ describe('Delivery Reliability', () => {
     mockRename.mockResolvedValue(undefined);
     mockUnlink.mockResolvedValue(undefined);
     mockReadFile.mockResolvedValue('');
+    mockLink.mockResolvedValue(undefined);
+    mockCopyFile.mockResolvedValue(undefined);
 
     // Setup proper-lockfile
     mockLockRelease = jest.fn();
@@ -423,6 +429,62 @@ describe('Delivery Reliability', () => {
 
         expect(mockUnlink).not.toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
         expect(mockLockRelease).toHaveBeenCalled();
+    });
+
+    it('should scan metrics using a snapshot file', async () => {
+        // Ensure no orphans so we focus on scan
+        mockReaddir.mockResolvedValue([]);
+
+        // Mock failed log existence
+        mockAccess.mockResolvedValue(undefined);
+
+        // Run init
+        await initDelivery();
+
+        // Should lock
+        expect(mockLock).toHaveBeenCalled();
+
+        // Should link (snapshot)
+        expect(mockLink).toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.jsonl'),
+            expect.stringContaining('snapshot.')
+        );
+
+        // Should create read stream for snapshot
+        expect(mockCreateReadStream).toHaveBeenCalledWith(
+            expect.stringContaining('snapshot.')
+        );
+
+        // Should release lock
+        expect(mockLockRelease).toHaveBeenCalled();
+
+        // Should unlink snapshot
+        expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
+    });
+
+    it('should fallback to copy if link fails during metrics scan', async () => {
+        mockReaddir.mockResolvedValue([]);
+        mockAccess.mockResolvedValue(undefined);
+
+        // Link fails
+        mockLink.mockRejectedValueOnce(new Error('Cross-device link not permitted'));
+
+        await initDelivery();
+
+        // Should try link
+        expect(mockLink).toHaveBeenCalled();
+
+        // Should fallback to copy
+        expect(mockCopyFile).toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.jsonl'),
+            expect.stringContaining('snapshot.')
+        );
+
+        // Should still process snapshot
+        expect(mockCreateReadStream).toHaveBeenCalledWith(
+            expect.stringContaining('snapshot.')
+        );
+        expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
     });
   });
 });
