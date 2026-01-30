@@ -485,11 +485,11 @@ describe('Delivery Reliability', () => {
             expect.stringContaining('snapshot.')
         );
 
-        // Should still clean up (though nothing to unlink if copy failed, the try/finally block handles this)
-        // Actually, if copy fails, snapshotPath is set but file might not exist.
-        // The finally block attempts to unlink snapshotPath if variable is set.
-        // Since we assigned snapshotPath before copy, it will try to unlink.
-        expect(mockUnlink).toHaveBeenCalled();
+        // Should NOT attempt to unlink (since snapshotPath was never set)
+        expect(mockUnlink).not.toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
+
+        // Should ensure lock is released
+        expect(mockLockRelease).toHaveBeenCalled();
     });
   });
 });

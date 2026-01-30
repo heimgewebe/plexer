@@ -139,7 +139,6 @@ export async function initDelivery(): Promise<void> {
     const now = Date.now();
     let rNow = 0;
     let snapshotPath: string | null = null;
-    let scanSuccess = false;
 
     try {
       // Lock to snapshot the file via copy
@@ -147,16 +146,16 @@ export async function initDelivery(): Promise<void> {
       let releaseScan;
       try {
         releaseScan = await lock(lockFile, { retries: 3 });
-        snapshotPath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
-        await fs.copyFile(failedLog, snapshotPath);
-        scanSuccess = true;
+        const candidatePath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
+        await fs.copyFile(failedLog, candidatePath);
+        snapshotPath = candidatePath;
       } catch (e) {
         logger.error({ err: e }, 'Failed to lock or copy FAILED_LOG during metrics scan');
       } finally {
         if (releaseScan) await releaseScan();
       }
 
-      if (scanSuccess && snapshotPath) {
+      if (snapshotPath) {
         try {
             for await (const line of readLinesSafe(snapshotPath)) {
                 if (!line.trim()) continue;
