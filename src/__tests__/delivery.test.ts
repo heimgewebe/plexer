@@ -460,6 +460,10 @@ describe('Delivery Reliability', () => {
     });
 
     it('should handle copy failure gracefully', async () => {
+        // Clear mocks to ensure no interference from other tests/calls
+        (logger.error as jest.Mock).mockClear();
+        mockUnlink.mockClear();
+
         mockReaddir.mockResolvedValue([]);
         mockAccess.mockResolvedValue(undefined);
 
@@ -482,8 +486,11 @@ describe('Delivery Reliability', () => {
             expect.stringContaining('snapshot.')
         );
 
-        // Should NOT attempt to unlink (since snapshotPath was never set)
-        expect(mockUnlink).not.toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
+        // Should NOT attempt to unlink any snapshot file (robust check)
+        const unlinkedSnapshot = mockUnlink.mock.calls.some((args: any[]) =>
+            String(args[0]).includes('snapshot.')
+        );
+        expect(unlinkedSnapshot).toBe(false);
 
         // Should ensure lock is released
         expect(mockLockRelease).toHaveBeenCalled();
