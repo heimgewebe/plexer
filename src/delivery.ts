@@ -139,40 +139,41 @@ export async function initDelivery(): Promise<void> {
     const now = Date.now();
     let rNow = 0;
     let snapshotPath: string | null = null;
+    let scanSuccess = false;
 
     try {
-      // Lock just to snapshot the file
+      // Lock to snapshot the file via copy
+      // We use copyFile to ensure a consistent point-in-time snapshot.
       let releaseScan;
       try {
         releaseScan = await lock(lockFile, { retries: 3 });
         snapshotPath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
-        // Use hard link for instant snapshot
-        try {
-          await fs.link(failedLog, snapshotPath);
-        } catch (e) {
-          // Fallback to copy if link fails (e.g. cross-device)
-          await fs.copyFile(failedLog, snapshotPath);
-        }
+        await fs.copyFile(failedLog, snapshotPath);
+        scanSuccess = true;
+      } catch (e) {
+        logger.error({ err: e }, 'Failed to lock or copy FAILED_LOG during metrics scan');
       } finally {
         if (releaseScan) await releaseScan();
       }
 
-      if (snapshotPath) {
-        for await (const line of readLinesSafe(snapshotPath)) {
-          if (!line.trim()) continue;
-          lineCount++;
-          try {
-            const e = JSON.parse(line) as FailedEvent;
-            const n = new Date(e.nextAttempt).getTime();
-            if (!isNaN(n)) {
-              if (n < minNext) minNext = n;
-              if (n <= now) rNow++;
+      if (scanSuccess && snapshotPath) {
+        try {
+            for await (const line of readLinesSafe(snapshotPath)) {
+                if (!line.trim()) continue;
+                lineCount++;
+                try {
+                const e = JSON.parse(line) as FailedEvent;
+                const n = new Date(e.nextAttempt).getTime();
+                if (!isNaN(n)) {
+                    if (n < minNext) minNext = n;
+                    if (n <= now) rNow++;
+                }
+                } catch {}
             }
-          } catch {}
+        } catch (e) {
+             logger.error({ err: e }, 'Failed to scan snapshot during metrics scan');
         }
       }
-    } catch (e) {
-      logger.error({ err: e }, 'Failed during metrics scan initialization');
     } finally {
       if (snapshotPath) {
         try { await fs.unlink(snapshotPath); } catch {}

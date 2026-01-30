@@ -431,7 +431,7 @@ describe('Delivery Reliability', () => {
         expect(mockLockRelease).toHaveBeenCalled();
     });
 
-    it('should scan metrics using a snapshot file', async () => {
+    it('should scan metrics using a file copy (snapshot)', async () => {
         // Ensure no orphans so we focus on scan
         mockReaddir.mockResolvedValue([]);
 
@@ -444,8 +444,8 @@ describe('Delivery Reliability', () => {
         // Should lock
         expect(mockLock).toHaveBeenCalled();
 
-        // Should link (snapshot)
-        expect(mockLink).toHaveBeenCalledWith(
+        // Should copy (snapshot)
+        expect(mockCopyFile).toHaveBeenCalledWith(
             expect.stringContaining('failed_forwards.jsonl'),
             expect.stringContaining('snapshot.')
         );
@@ -462,29 +462,34 @@ describe('Delivery Reliability', () => {
         expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
     });
 
-    it('should fallback to copy if link fails during metrics scan', async () => {
+    it('should handle copy failure gracefully', async () => {
         mockReaddir.mockResolvedValue([]);
         mockAccess.mockResolvedValue(undefined);
 
-        // Link fails
-        mockLink.mockRejectedValueOnce(new Error('Cross-device link not permitted'));
+        // Copy fails
+        mockCopyFile.mockRejectedValueOnce(new Error('Disk full'));
 
         await initDelivery();
 
-        // Should try link
-        expect(mockLink).toHaveBeenCalled();
+        // Should try copy
+        expect(mockCopyFile).toHaveBeenCalled();
 
-        // Should fallback to copy
-        expect(mockCopyFile).toHaveBeenCalledWith(
-            expect.stringContaining('failed_forwards.jsonl'),
+        // Should log error
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ err: expect.any(Error) }),
+            expect.stringContaining('Failed to lock or copy FAILED_LOG')
+        );
+
+        // Should NOT process snapshot
+        expect(mockCreateReadStream).not.toHaveBeenCalledWith(
             expect.stringContaining('snapshot.')
         );
 
-        // Should still process snapshot
-        expect(mockCreateReadStream).toHaveBeenCalledWith(
-            expect.stringContaining('snapshot.')
-        );
-        expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
+        // Should still clean up (though nothing to unlink if copy failed, the try/finally block handles this)
+        // Actually, if copy fails, snapshotPath is set but file might not exist.
+        // The finally block attempts to unlink snapshotPath if variable is set.
+        // Since we assigned snapshotPath before copy, it will try to unlink.
+        expect(mockUnlink).toHaveBeenCalled();
     });
   });
 });
