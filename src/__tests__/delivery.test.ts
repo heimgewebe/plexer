@@ -24,6 +24,7 @@ jest.mock('fs/promises', () => ({
   readFile: jest.fn(),
   mkdir: jest.fn(),
   stat: jest.fn(),
+  copyFile: jest.fn(),
 }));
 
 // Mock fs (createReadStream, createWriteStream)
@@ -88,6 +89,7 @@ describe('Delivery Reliability', () => {
   const mockReadFile = fsPromises.readFile as jest.Mock;
   const mockMkdir = fsPromises.mkdir as jest.Mock;
   const mockStat = fsPromises.stat as jest.Mock;
+  const mockCopyFile = fsPromises.copyFile as jest.Mock;
 
   const mockCreateReadStream = fs.createReadStream as jest.Mock;
   const mockCreateWriteStream = fs.createWriteStream as jest.Mock;
@@ -108,6 +110,7 @@ describe('Delivery Reliability', () => {
     mockRename.mockResolvedValue(undefined);
     mockUnlink.mockResolvedValue(undefined);
     mockReadFile.mockResolvedValue('');
+    mockCopyFile.mockResolvedValue(undefined);
 
     // Setup proper-lockfile
     mockLockRelease = jest.fn();
@@ -423,6 +426,113 @@ describe('Delivery Reliability', () => {
 
         expect(mockUnlink).not.toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
         expect(mockLockRelease).toHaveBeenCalled();
+    });
+
+    it('should scan metrics using a file copy (snapshot)', async () => {
+        // Ensure no orphans so we focus on scan
+        mockReaddir.mockResolvedValue([]);
+
+        // Mock failed log existence
+        mockAccess.mockResolvedValue(undefined);
+
+        // Run init
+        await initDelivery();
+
+        // Should lock
+        expect(mockLock).toHaveBeenCalled();
+
+        // Should copy (snapshot)
+        expect(mockCopyFile).toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.jsonl'),
+            expect.stringContaining('snapshot.')
+        );
+
+        // Should create read stream for snapshot
+        expect(mockCreateReadStream).toHaveBeenCalledWith(
+            expect.stringContaining('snapshot.')
+        );
+        // Should NOT read from the source file directly (metrics scan)
+        expect(mockCreateReadStream).not.toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.jsonl')
+        );
+
+        // Should release lock
+        expect(mockLockRelease).toHaveBeenCalled();
+
+        // Should unlink snapshot
+        expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
+    });
+
+    it('should handle copy failure gracefully', async () => {
+        // Clear mocks to ensure no interference from other tests/calls
+        (logger.error as jest.Mock).mockClear();
+        mockUnlink.mockClear();
+        mockCreateReadStream.mockClear();
+        mockCopyFile.mockClear();
+
+        mockReaddir.mockResolvedValue([]);
+        mockAccess.mockResolvedValue(undefined);
+
+        // Copy fails
+        mockCopyFile.mockRejectedValueOnce(new Error('Disk full'));
+
+        await initDelivery();
+
+        // Should try copy
+        expect(mockCopyFile).toHaveBeenCalled();
+
+        // Should log error
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ err: expect.any(Error) }),
+            expect.stringContaining('Failed to lock or copy FAILED_LOG')
+        );
+
+        // Should NOT process snapshot
+        expect(mockCreateReadStream).not.toHaveBeenCalledWith(
+            expect.stringContaining('snapshot.')
+        );
+
+        // Should NOT attempt to unlink any snapshot file (robust check)
+        const unlinkedSnapshot = mockUnlink.mock.calls.some((args: any[]) =>
+            String(args[0]).includes('snapshot.')
+        );
+        expect(unlinkedSnapshot).toBe(false);
+
+        // Should ensure lock is released
+        expect(mockLockRelease).toHaveBeenCalled();
+    });
+
+    it('should handle lock failure gracefully', async () => {
+        // Clear mocks
+        (logger.error as jest.Mock).mockClear();
+        mockCopyFile.mockClear();
+        mockLockRelease?.mockClear?.();
+
+        mockReaddir.mockResolvedValue([]);
+        mockAccess.mockResolvedValue(undefined);
+
+        // Lock fails
+        mockLock.mockRejectedValueOnce(new Error('Lock contention'));
+
+        await initDelivery();
+
+        // Should try lock with specific options
+        expect(mockLock).toHaveBeenCalledWith(
+            expect.stringContaining('failed_forwards.lock'),
+            expect.objectContaining({ retries: 3 })
+        );
+
+        // Should NOT copy
+        expect(mockCopyFile).not.toHaveBeenCalled();
+
+        // Should log error
+        expect(logger.error).toHaveBeenCalledWith(
+            expect.objectContaining({ err: expect.any(Error) }),
+            expect.stringContaining('Failed to lock or copy FAILED_LOG')
+        );
+
+        // Should NOT release lock (it wasn't acquired)
+        expect(mockLockRelease).not.toHaveBeenCalled();
     });
   });
 });

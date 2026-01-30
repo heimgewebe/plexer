@@ -134,32 +134,49 @@ export async function initDelivery(): Promise<void> {
     // Ensure FAILED_LOG exists for reading
     try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
 
-    let releaseScan;
     let lineCount = 0;
     let minNext = Infinity;
     const now = Date.now();
     let rNow = 0;
+    let snapshotPath: string | null = null;
 
     try {
-      // Lock for read to support multi-instance / safe startup
-      releaseScan = await lock(lockFile, { retries: 3 });
-
-      for await (const line of readLinesSafe(failedLog)) {
-        if (!line.trim()) continue;
-        lineCount++;
-        try {
-          const e = JSON.parse(line) as FailedEvent;
-          const n = new Date(e.nextAttempt).getTime();
-          if (!isNaN(n)) {
-            if (n < minNext) minNext = n;
-            if (n <= now) rNow++;
-          }
-        } catch {}
+      // Lock to snapshot the file via copy
+      // We use copyFile to ensure a consistent point-in-time snapshot.
+      let releaseScan;
+      try {
+        releaseScan = await lock(lockFile, { retries: 3 });
+        const candidatePath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
+        await fs.copyFile(failedLog, candidatePath);
+        snapshotPath = candidatePath;
+      } catch (e) {
+        logger.error({ err: e }, 'Failed to lock or copy FAILED_LOG during metrics scan');
+      } finally {
+        if (releaseScan) await releaseScan();
       }
-    } catch (e) {
-      logger.error({ err: e }, 'Failed to lock/read FAILED_LOG during metrics scan');
+
+      if (snapshotPath) {
+        try {
+            for await (const line of readLinesSafe(snapshotPath)) {
+                if (!line.trim()) continue;
+                lineCount++;
+                try {
+                const e = JSON.parse(line) as FailedEvent;
+                const n = new Date(e.nextAttempt).getTime();
+                if (!isNaN(n)) {
+                    if (n < minNext) minNext = n;
+                    if (n <= now) rNow++;
+                }
+                } catch {}
+            }
+        } catch (e) {
+             logger.error({ err: e }, 'Failed to scan snapshot during metrics scan');
+        }
+      }
     } finally {
-      if (releaseScan) await releaseScan();
+      if (snapshotPath) {
+        try { await fs.unlink(snapshotPath); } catch {}
+      }
     }
 
     failedCount = lineCount;
