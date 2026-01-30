@@ -463,6 +463,7 @@ describe('Delivery Reliability', () => {
         // Clear mocks to ensure no interference from other tests/calls
         (logger.error as jest.Mock).mockClear();
         mockUnlink.mockClear();
+        mockCreateReadStream.mockClear();
 
         mockReaddir.mockResolvedValue([]);
         mockAccess.mockResolvedValue(undefined);
