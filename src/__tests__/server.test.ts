@@ -352,9 +352,10 @@ describe('Server', () => {
       expect(logContext.source).toBe('test-suite');
 
       // Verify truncation semantics
+      const ELLIPSIS = '…';
       expect(typeof logContext.payload).toBe('string');
-      expect(logContext.payload.endsWith('…')).toBe(true);
-      expect(logContext.payload.length).toBe(LOG_PAYLOAD_PREVIEW_LENGTH + 1);
+      expect(logContext.payload.endsWith(ELLIPSIS)).toBe(true);
+      expect(logContext.payload.length).toBe(LOG_PAYLOAD_PREVIEW_LENGTH + ELLIPSIS.length);
     });
 
     it('should trim whitespace from type and source before forwarding', async () => {
