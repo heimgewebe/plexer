@@ -326,9 +326,7 @@ describe('Server', () => {
       expect(requestBody).not.toHaveProperty('ts');
     });
 
-    it('should truncate long payloads in logs (implicit check via code structure logic)', async () => {
-      // It's hard to test the console.log output directly without complex spying setup,
-      // but we can verify the request still succeeds with a long payload.
+    it('should truncate long payloads in logs', async () => {
       const longString = 'a'.repeat(300);
       const payload = {
         type: 'test.event',
@@ -341,17 +339,15 @@ describe('Server', () => {
       // Only Heimgeist should receive 'test.event'
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      // We check that logger.info was called
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'test.event',
-          source: 'test-suite',
-          // The payload preview should be truncated in the log
-          // We can't easily check the exact string here because it's JSON stringified
-          // and might include structure, but we can check it was called.
-        }),
-        'Received event'
-      );
+      // Verify that logger.info was called with the truncated payload
+      const calls = (logger.info as jest.Mock).mock.calls;
+      const receivedEventLog = calls.find(args => args[1] === 'Received event');
+      expect(receivedEventLog).toBeDefined();
+
+      const logContext = receivedEventLog[0];
+      expect(logContext.payload).toBeDefined();
+      expect(logContext.payload.length).toBe(101); // 100 chars + '…'
+      expect(logContext.payload.endsWith('…')).toBe(true);
     });
 
     it('should trim whitespace from type and source before forwarding', async () => {
