@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { createServer, processEvent } from '../server';
+import { createServer, processEvent, LOG_PAYLOAD_PREVIEW_LENGTH } from '../server';
 import { config } from '../config';
 
 // Mock logger
@@ -344,10 +344,17 @@ describe('Server', () => {
       const receivedEventLog = calls.find(args => args[1] === 'Received event');
       expect(receivedEventLog).toBeDefined();
 
-      const logContext = receivedEventLog[0];
-      expect(logContext.payload).toBeDefined();
-      expect(logContext.payload.length).toBe(101); // 100 chars + '…'
+      // Use non-null assertion consistent with codebase conventions
+      const logContext = receivedEventLog![0];
+
+      // Verify we found the correct log entry
+      expect(logContext.type).toBe('test.event');
+      expect(logContext.source).toBe('test-suite');
+
+      // Verify truncation semantics
+      expect(typeof logContext.payload).toBe('string');
       expect(logContext.payload.endsWith('…')).toBe(true);
+      expect(logContext.payload.length).toBe(LOG_PAYLOAD_PREVIEW_LENGTH + 1);
     });
 
     it('should trim whitespace from type and source before forwarding', async () => {
