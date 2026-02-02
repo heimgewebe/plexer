@@ -190,19 +190,41 @@ export async function initDelivery(): Promise<void> {
 interface QueueItem {
   entry: FailedEvent;
   resolve: () => void;
-  reject: (reason: any) => void;
 }
 
 const writeQueue: QueueItem[] = [];
 let isFlushing = false;
+let flushScheduled = false;
+const flushWaiters: (() => void)[] = [];
 
 function scheduleFlush() {
-  if (isFlushing) return;
+  if (isFlushing || flushScheduled) return;
+  flushScheduled = true;
   setImmediate(processWriteQueue);
 }
 
+/**
+ * Ensures all pending writes in the queue are flushed to disk.
+ * Useful for graceful shutdowns and tests.
+ */
+export async function flushFailedWrites(): Promise<void> {
+  if (writeQueue.length === 0 && !isFlushing) return;
+  return new Promise<void>((resolve) => {
+    flushWaiters.push(resolve);
+    scheduleFlush();
+  });
+}
+
 async function processWriteQueue() {
-  if (isFlushing || writeQueue.length === 0) return;
+  flushScheduled = false;
+  if (isFlushing || writeQueue.length === 0) {
+    // If empty and not flushing, we might need to notify waiters that we are done
+    if (!isFlushing && writeQueue.length === 0 && flushWaiters.length > 0) {
+      flushWaiters.forEach((resolve) => resolve());
+      flushWaiters.length = 0;
+    }
+    return;
+  }
   isFlushing = true;
 
   const batch = writeQueue.splice(0, writeQueue.length);
@@ -231,6 +253,10 @@ async function processWriteQueue() {
     isFlushing = false;
     if (writeQueue.length > 0) {
       scheduleFlush();
+    } else if (flushWaiters.length > 0) {
+      // Queue is empty, notify all waiters
+      flushWaiters.forEach((resolve) => resolve());
+      flushWaiters.length = 0;
     }
   }
 }
@@ -261,13 +287,18 @@ export async function saveFailedEvent(
     return;
   }
 
-  return new Promise<void>((resolve, reject) => {
-    writeQueue.push({ entry: failedEvent, resolve, reject });
+  // Best-effort: we never reject the promise to the caller, effectively
+  // making it fire-and-forget but with backpressure support if they await it.
+  return new Promise<void>((resolve) => {
+    writeQueue.push({ entry: failedEvent, resolve });
     scheduleFlush();
   });
 }
 
 export async function retryFailedEvents(): Promise<void> {
+  // Ensure we flush any in-memory events before rotating the log file
+  await flushFailedWrites();
+
   lastRetryAt = new Date().toISOString();
   await ensureDataDir();
   await ensureLockFile();

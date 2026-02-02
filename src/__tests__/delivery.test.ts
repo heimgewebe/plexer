@@ -71,7 +71,7 @@ const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
 // Import subject under test
-import { saveFailedEvent, retryFailedEvents, initDelivery } from '../delivery';
+import { saveFailedEvent, retryFailedEvents, initDelivery, flushFailedWrites } from '../delivery';
 
 describe('Delivery Reliability', () => {
   let mockStream: any;
@@ -125,6 +125,9 @@ describe('Delivery Reliability', () => {
     // Mock createWriteStream to return a valid Writable stub to avoid misleading tests
     mockDestStream = new Writable({ write: (c, e, cb) => cb() });
     mockCreateWriteStream.mockReturnValue(mockDestStream);
+
+    // Explicitly resolve pipeline to avoid hangs
+    mockPipeline.mockResolvedValue(undefined);
 
     mockRl = {
       on: jest.fn(),
@@ -180,7 +183,35 @@ describe('Delivery Reliability', () => {
        // Pass invalid event (schema check happens inside saveFailedEvent)
        await saveFailedEvent(invalidEvent, 'test-consumer', 'err');
 
-       expect(mockAppendFile).not.toHaveBeenCalled();
+       expect(mockCreateWriteStream).not.toHaveBeenCalled();
+    });
+
+    it('should wait for flushFailedWrites to drain the queue', async () => {
+        // Arrange: Add item to queue (mock lock delay to simulate active flush)
+        let resolveLock: any;
+        mockLock.mockReturnValue(new Promise(resolve => { resolveLock = resolve; }));
+
+        const event = { type: 'test', source: 'src', payload: {} };
+        const savePromise = saveFailedEvent(event, 'test-consumer', 'err');
+
+        // Act: call flushFailedWrites
+        const flushPromise = flushFailedWrites();
+
+        // Assert: Flush should not be done yet
+        let flushDone = false;
+        flushPromise.then(() => { flushDone = true; });
+
+        // Wait a tick
+        await new Promise(r => setImmediate(r));
+        expect(flushDone).toBe(false);
+
+        // Resolve lock -> allows processWriteQueue to finish
+        resolveLock(mockLockRelease);
+
+        await flushPromise;
+        await savePromise;
+
+        expect(mockCreateWriteStream).toHaveBeenCalled();
     });
   });
 
