@@ -1,9 +1,16 @@
 
+import fsPromises from 'fs/promises';
+import fs from 'fs';
+import readline from 'readline';
 import { Readable, Writable } from 'stream';
+import { lock } from 'proper-lockfile';
 
 /**
  * Logger Mock Strategy:
  * Jest automatically hoists jest.mock calls to the top of the block.
+ * This ensures the logger is mocked before any imports (like ../delivery) use it.
+ * Note: Modules under test must not use the logger at the top-level (outside functions),
+ * otherwise the mock might not apply correctly or could lead to initialization order issues.
  */
 
 // Mock fs/promises with explicit factory
@@ -57,85 +64,41 @@ jest.mock('../logger', () => ({
     debug: jest.fn(),
   },
 }));
+import { logger } from '../logger';
 
 // Mock global fetch
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
+// Import subject under test
+import { saveFailedEvent, retryFailedEvents, initDelivery, flushFailedWrites } from '../delivery';
+
 describe('Delivery Reliability', () => {
-  // Module under test
-  let delivery: any;
-  let saveFailedEvent: any;
-  let retryFailedEvents: any;
-  let initDelivery: any;
-  let flushFailedWrites: any;
-  let logger: any;
-
-  // Mocks
-  let mockAppendFile: jest.Mock;
-  let mockWriteFile: jest.Mock;
-  let mockAccess: jest.Mock;
-  let mockRename: jest.Mock;
-  let mockUnlink: jest.Mock;
-  let mockReaddir: jest.Mock;
-  let mockReadFile: jest.Mock;
-  let mockMkdir: jest.Mock;
-  let mockStat: jest.Mock;
-  let mockCopyFile: jest.Mock;
-  let mockCreateReadStream: jest.Mock;
-  let mockCreateWriteStream: jest.Mock;
-  let mockPipeline: jest.Mock;
-  let mockCreateInterface: jest.Mock;
-  let mockLock: jest.Mock;
-
   let mockStream: any;
   let mockRl: any;
   let mockLockRelease: any;
   let mockDestStream: Writable;
 
+  // Access mocks
+  const mockAppendFile = fsPromises.appendFile as jest.Mock;
+  const mockWriteFile = fsPromises.writeFile as jest.Mock;
+  const mockAccess = fsPromises.access as jest.Mock;
+  const mockRename = fsPromises.rename as jest.Mock;
+  const mockUnlink = fsPromises.unlink as jest.Mock;
+  const mockReaddir = fsPromises.readdir as jest.Mock;
+  const mockReadFile = fsPromises.readFile as jest.Mock;
+  const mockMkdir = fsPromises.mkdir as jest.Mock;
+  const mockStat = fsPromises.stat as jest.Mock;
+  const mockCopyFile = fsPromises.copyFile as jest.Mock;
+
+  const mockCreateReadStream = fs.createReadStream as jest.Mock;
+  const mockCreateWriteStream = fs.createWriteStream as jest.Mock;
+  const mockPipeline = require('stream/promises').pipeline as jest.Mock;
+  const mockCreateInterface = readline.createInterface as jest.Mock;
+  const mockLock = lock as jest.Mock;
+
   beforeEach(() => {
-    // RESET MODULES to ensure fresh state (writeQueue, isFlushing)
-    jest.resetModules();
     jest.clearAllMocks();
-
-    // Re-acquire mocks from the fresh modules
-    // Note: jest.mock factories run again, creating NEW jest.fn() instances
-    const fsP = require('fs/promises');
-    mockAppendFile = fsP.appendFile;
-    mockWriteFile = fsP.writeFile;
-    mockAccess = fsP.access;
-    mockRename = fsP.rename;
-    mockUnlink = fsP.unlink;
-    mockReaddir = fsP.readdir;
-    mockReadFile = fsP.readFile;
-    mockMkdir = fsP.mkdir;
-    mockStat = fsP.stat;
-    mockCopyFile = fsP.copyFile;
-
-    const fs = require('fs');
-    mockCreateReadStream = fs.createReadStream;
-    mockCreateWriteStream = fs.createWriteStream;
-
-    const streamP = require('stream/promises');
-    mockPipeline = streamP.pipeline;
-
-    const readline = require('readline');
-    mockCreateInterface = readline.createInterface;
-
-    const properLockfile = require('proper-lockfile');
-    mockLock = properLockfile.lock;
-
-    const loggerModule = require('../logger');
-    logger = loggerModule.logger;
-
-    // Re-import subject
-    delivery = require('../delivery');
-    saveFailedEvent = delivery.saveFailedEvent;
-    retryFailedEvents = delivery.retryFailedEvents;
-    initDelivery = delivery.initDelivery;
-    flushFailedWrites = delivery.flushFailedWrites;
-
-    // --- SETUP MOCK BEHAVIORS ---
 
     // Default fs/promises behavior
     mockAccess.mockResolvedValue(undefined); // Files exist by default
@@ -159,7 +122,7 @@ describe('Delivery Reliability', () => {
       destroy: jest.fn(),
     };
     mockCreateReadStream.mockReturnValue(mockStream);
-    // Mock createWriteStream to return a valid Writable stub
+    // Mock createWriteStream to return a valid Writable stub to avoid misleading tests
     mockDestStream = new Writable({ write: (c, e, cb) => cb() });
     mockCreateWriteStream.mockReturnValue(mockDestStream);
 
@@ -224,37 +187,28 @@ describe('Delivery Reliability', () => {
     });
 
     it('should wait for flushFailedWrites to drain the queue', async () => {
-        // Arrange: Add item to queue (mock lock delay to simulate active flush)
         let resolveLock: ((val: any) => void) | undefined;
-        // Use mockImplementationOnce on the FRESH mockLock
-        mockLock.mockImplementationOnce(() => new Promise(resolve => { resolveLock = resolve; }));
+        let lockCalledResolve: () => void;
+        const lockCalled = new Promise<void>(r => { lockCalledResolve = r; });
+
+        mockLock.mockImplementationOnce(() => {
+            lockCalledResolve();
+            return new Promise(resolve => { resolveLock = resolve; });
+        });
 
         const event = { type: 'test', source: 'src', payload: {} };
         const savePromise = saveFailedEvent(event, 'test-consumer', 'err');
-
-        // Act: call flushFailedWrites
         const flushPromise = flushFailedWrites();
 
-        // Assert: Flush should not be done yet
-        const raceResult = await Promise.race([
+        await lockCalled;
+
+        const raced = await Promise.race([
           flushPromise.then(() => 'flush'),
           Promise.resolve('pending')
         ]);
-        expect(raceResult).toBe('pending');
+        expect(raced).toBe('pending');
 
-        // Wait for lock to be acquired
-        let attempts = 0;
-        while (!resolveLock && attempts < 20) {
-            await new Promise(r => setTimeout(r, 10));
-            attempts++;
-        }
-
-        if (!resolveLock) {
-            throw new Error('Timeout waiting for lock acquisition - mockLock was not called');
-        }
-
-        // Resolve lock -> allows processWriteQueue to finish
-        resolveLock(mockLockRelease);
+        if (resolveLock) resolveLock(mockLockRelease);
 
         await flushPromise;
         await savePromise;
@@ -265,6 +219,7 @@ describe('Delivery Reliability', () => {
 
   describe('retryFailedEvents', () => {
     it('should forward due events successfully and remove them', async () => {
+      // Mock renaming success
       mockRename.mockResolvedValue(undefined);
 
       const dueEvent = {
@@ -278,6 +233,7 @@ describe('Delivery Reliability', () => {
 
       mockReadLines([JSON.stringify(dueEvent)]);
 
+      // Mock fetch success
       mockFetch.mockResolvedValue({
         ok: true,
         status: 200,
@@ -285,14 +241,25 @@ describe('Delivery Reliability', () => {
 
       await retryFailedEvents();
 
+      // Should verify lock -> rename -> write empty -> unlock
       expect(mockRename).toHaveBeenCalled();
       expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('failed_forwards.jsonl'), '');
+
+      // Should fetch
       expect(mockFetch).toHaveBeenCalledWith(
         'http://test.local',
         expect.objectContaining({ method: 'POST' })
       );
+
+      // Should NOT re-append (success means removed from queue)
       expect(mockAppendFile).not.toHaveBeenCalled();
+
+      // Should clean up processing file
       expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('processing.'));
+
+      // Verify resource cleanup
+      expect(mockRl.close).toHaveBeenCalled();
+      expect(mockStream.destroy).toHaveBeenCalled();
     });
 
     it('should increment retry count and requeue on failure', async () => {
@@ -307,6 +274,7 @@ describe('Delivery Reliability', () => {
 
       mockReadLines([JSON.stringify(dueEvent)]);
 
+      // Mock fetch failure
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
@@ -315,15 +283,20 @@ describe('Delivery Reliability', () => {
 
       await retryFailedEvents();
 
+      // Should attempt fetch
       expect(mockFetch).toHaveBeenCalled();
+
+      // Should re-append with incremented retry count
       expect(mockCreateWriteStream).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
         expect.objectContaining({ flags: 'a', encoding: 'utf8' }),
       );
       expect(mockPipeline).toHaveBeenCalled();
 
+      // Inspect streamed content (Source-side verification since pipeline is mocked)
+      // Use filter + pop to get the LAST call associated with our dest stream
       const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
-      const pipelineCall = pipelineCalls.pop();
+      const pipelineCall = pipelineCalls.pop(); // Get last call
       expect(pipelineCall).toBeDefined();
       const readable = pipelineCall[0] as Readable;
       const chunks = [];
@@ -331,6 +304,8 @@ describe('Delivery Reliability', () => {
       const content = chunks.join('');
 
       expect(content).toContain('"retryCount":1');
+
+      // Cleanup
       expect(mockUnlink).toHaveBeenCalled();
     });
 
@@ -349,10 +324,24 @@ describe('Delivery Reliability', () => {
       await retryFailedEvents();
 
       expect(mockFetch).not.toHaveBeenCalled();
+
+      // Should re-append unchanged (or at least preserved)
       expect(mockCreateWriteStream).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
         expect.objectContaining({ flags: 'a', encoding: 'utf8' }),
       );
+      expect(mockPipeline).toHaveBeenCalled();
+
+      // Inspect streamed content (Source-side verification since pipeline is mocked)
+      const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
+      const pipelineCall = pipelineCalls.pop();
+      expect(pipelineCall).toBeDefined();
+      const readable = pipelineCall[0] as Readable;
+      const chunks = [];
+      for await (const chunk of readable) chunks.push(chunk);
+      const content = chunks.join('');
+
+      expect(content).toContain('"retryCount":0');
     });
 
     it('should ensure nextAttempt is strictly in the future after a failed retry', async () => {
@@ -368,6 +357,7 @@ describe('Delivery Reliability', () => {
 
       mockReadLines([JSON.stringify(dueEvent)]);
 
+      // Mock fetch failure (500)
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
@@ -381,6 +371,7 @@ describe('Delivery Reliability', () => {
         expect.any(Object),
       );
 
+      // Inspect streamed content (Source-side verification since pipeline is mocked)
       const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
       const pipelineCall = pipelineCalls.pop();
       expect(pipelineCall).toBeDefined();
@@ -390,32 +381,43 @@ describe('Delivery Reliability', () => {
       const content = chunks.join('');
 
       const savedLines = content.trim().split('\n');
-      const savedEvent = JSON.parse(savedLines[0]);
+      const savedEvent = JSON.parse(savedLines[0]); // Should be the only event
 
       const nextAttemptTime = new Date(savedEvent.nextAttempt).getTime();
       expect(nextAttemptTime).toBeGreaterThan(now);
     });
 
     it('should handle stream errors gracefully during retry', async () => {
+        // Mock renaming success
         mockRename.mockResolvedValue(undefined);
 
+        // Setup a stream that emits error
         mockStream.on.mockImplementation((event: string, cb: Function) => {
             if (event === 'error') {
+                // Trigger callback immediately (synchronously)
                 cb(new Error('Stream failure'));
             }
         });
 
+        // Ensure generator allows the error to propagate
         mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {
+            // Yield nothing; keep pending so the error event (via Promise.race) wins the race.
+            // Use a short timeout (50ms) to ensure we don't hang CI if the error fails to trigger.
             await new Promise(r => setTimeout(r, 50));
         })());
 
         await retryFailedEvents();
 
+        // Expect lock release to be called (finally block)
         expect(mockLockRelease).toHaveBeenCalled();
+
+        // Expect logger error to be called with specific error
         expect(logger.error).toHaveBeenCalledWith(
             expect.objectContaining({ err: expect.any(Error) }),
             expect.stringContaining('Error processing failed events')
         );
+
+        // Expect processing file NOT to be unlinked (crash recovery logic)
         expect(mockUnlink).not.toHaveBeenCalled();
     });
   });
@@ -436,57 +438,77 @@ describe('Delivery Reliability', () => {
 
         await initDelivery();
 
+        // Lock -> Read orphan -> Append to failed log -> Unlink orphan -> Unlock
         expect(mockLock).toHaveBeenCalled();
+
         expect(mockCreateReadStream).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
         expect(mockCreateWriteStream).toHaveBeenCalledWith(
             expect.stringContaining('failed_forwards.jsonl'),
             { flags: 'a' }
         );
         expect(mockPipeline).toHaveBeenCalled();
+
         expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
         expect(mockLockRelease).toHaveBeenCalled();
     });
 
     it('should handle pipeline failure during orphan recovery', async () => {
-        // We use the fresh logger instance here
         (logger.error as jest.Mock).mockClear();
         mockReaddir.mockResolvedValue(['processing.123.jsonl']);
         mockPipeline.mockRejectedValueOnce(new Error('Pipeline error'));
 
         await initDelivery();
 
+        // Lock -> Pipeline Error -> Log Error -> Unlock (No Unlink)
         expect(mockLock).toHaveBeenCalled();
         expect(mockPipeline).toHaveBeenCalled();
+
         expect(logger.error).toHaveBeenCalledWith(
             expect.objectContaining({ err: expect.any(Error) }),
             expect.stringContaining('Failed to recover orphaned file')
         );
+
         expect(mockUnlink).not.toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
         expect(mockLockRelease).toHaveBeenCalled();
     });
 
     it('should scan metrics using a file copy (snapshot)', async () => {
+        // Ensure no orphans so we focus on scan
         mockReaddir.mockResolvedValue([]);
+
+        // Mock failed log existence
         mockAccess.mockResolvedValue(undefined);
 
+        // Run init
         await initDelivery();
 
+        // Should lock
         expect(mockLock).toHaveBeenCalled();
+
+        // Should copy (snapshot)
         expect(mockCopyFile).toHaveBeenCalledWith(
             expect.stringContaining('failed_forwards.jsonl'),
             expect.stringContaining('snapshot.')
         );
+
+        // Should create read stream for snapshot
         expect(mockCreateReadStream).toHaveBeenCalledWith(
             expect.stringContaining('snapshot.')
         );
+        // Should NOT read from the source file directly (metrics scan)
         expect(mockCreateReadStream).not.toHaveBeenCalledWith(
             expect.stringContaining('failed_forwards.jsonl')
         );
+
+        // Should release lock
         expect(mockLockRelease).toHaveBeenCalled();
+
+        // Should unlink snapshot
         expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
     });
 
     it('should handle copy failure gracefully', async () => {
+        // Clear mocks to ensure no interference from other tests/calls
         (logger.error as jest.Mock).mockClear();
         mockUnlink.mockClear();
         mockCreateReadStream.mockClear();
@@ -495,45 +517,66 @@ describe('Delivery Reliability', () => {
         mockReaddir.mockResolvedValue([]);
         mockAccess.mockResolvedValue(undefined);
 
+        // Copy fails
         mockCopyFile.mockRejectedValueOnce(new Error('Disk full'));
 
         await initDelivery();
 
+        // Should try copy
         expect(mockCopyFile).toHaveBeenCalled();
+
+        // Should log error
         expect(logger.error).toHaveBeenCalledWith(
             expect.objectContaining({ err: expect.any(Error) }),
             expect.stringContaining('Failed to lock or copy FAILED_LOG')
         );
+
+        // Should NOT process snapshot
         expect(mockCreateReadStream).not.toHaveBeenCalledWith(
             expect.stringContaining('snapshot.')
         );
+
+        // Should NOT attempt to unlink any snapshot file (robust check)
         const unlinkedSnapshot = mockUnlink.mock.calls.some((args: any[]) =>
             String(args[0]).includes('snapshot.')
         );
         expect(unlinkedSnapshot).toBe(false);
+
+        // Should ensure lock is released
         expect(mockLockRelease).toHaveBeenCalled();
     });
 
     it('should handle lock failure gracefully', async () => {
+        // Clear mocks
         (logger.error as jest.Mock).mockClear();
         mockCopyFile.mockClear();
+        mockLockRelease?.mockClear?.();
 
         mockReaddir.mockResolvedValue([]);
         mockAccess.mockResolvedValue(undefined);
 
+        // Lock fails
         mockLock.mockRejectedValueOnce(new Error('Lock contention'));
 
         await initDelivery();
 
+        // Should try lock with specific options
         expect(mockLock).toHaveBeenCalledWith(
             expect.stringContaining('failed_forwards.lock'),
             expect.objectContaining({ retries: 3 })
         );
+
+        // Should NOT copy
         expect(mockCopyFile).not.toHaveBeenCalled();
+
+        // Should log error
         expect(logger.error).toHaveBeenCalledWith(
             expect.objectContaining({ err: expect.any(Error) }),
             expect.stringContaining('Failed to lock or copy FAILED_LOG')
         );
+
+        // Should NOT release lock (it wasn't acquired)
+        expect(mockLockRelease).not.toHaveBeenCalled();
     });
   });
 });
