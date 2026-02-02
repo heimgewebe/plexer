@@ -215,14 +215,17 @@ export async function flushFailedWrites(): Promise<void> {
   });
 }
 
+function notifyFlushWaitersIfDrained() {
+  if (!isFlushing && writeQueue.length === 0 && flushWaiters.length > 0) {
+    flushWaiters.forEach((resolve) => resolve());
+    flushWaiters.length = 0;
+  }
+}
+
 async function processWriteQueue() {
   flushScheduled = false;
   if (isFlushing || writeQueue.length === 0) {
-    // If empty and not flushing, we might need to notify waiters that we are done
-    if (!isFlushing && writeQueue.length === 0 && flushWaiters.length > 0) {
-      flushWaiters.forEach((resolve) => resolve());
-      flushWaiters.length = 0;
-    }
+    notifyFlushWaitersIfDrained();
     return;
   }
   isFlushing = true;
@@ -253,10 +256,8 @@ async function processWriteQueue() {
     isFlushing = false;
     if (writeQueue.length > 0) {
       scheduleFlush();
-    } else if (flushWaiters.length > 0) {
-      // Queue is empty, notify all waiters
-      flushWaiters.forEach((resolve) => resolve());
-      flushWaiters.length = 0;
+    } else {
+      notifyFlushWaitersIfDrained();
     }
   }
 }
