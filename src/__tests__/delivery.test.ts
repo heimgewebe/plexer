@@ -157,6 +157,9 @@ describe('Delivery Reliability', () => {
 
       await saveFailedEvent(event, 'test-consumer', 'some error');
 
+      // Explicitly wait for flush to ensure deterministic verification of pipeline calls
+      await flushFailedWrites();
+
       // Now uses batchAppendEvents which uses createWriteStream + pipeline
       expect(mockCreateWriteStream).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
