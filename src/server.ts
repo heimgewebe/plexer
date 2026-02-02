@@ -18,6 +18,7 @@ import {
 } from './delivery';
 
 const MAX_STRING_LENGTH = 256;
+export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
 
 const pendingFetches = new Set<Promise<void>>();
 
@@ -246,8 +247,8 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
     }
   }
 
-  if (payloadPreview.length > 100) {
-    payloadPreview = `${payloadPreview.slice(0, 100)}…`;
+  if (payloadPreview.length > LOG_PAYLOAD_PREVIEW_LENGTH) {
+    payloadPreview = `${payloadPreview.slice(0, LOG_PAYLOAD_PREVIEW_LENGTH)}…`;
   }
 
   logger.info({

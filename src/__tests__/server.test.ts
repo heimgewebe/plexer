@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { createServer, processEvent } from '../server';
+import { createServer, processEvent, LOG_PAYLOAD_PREVIEW_LENGTH } from '../server';
 import { config } from '../config';
 
 // Mock logger
@@ -326,9 +326,7 @@ describe('Server', () => {
       expect(requestBody).not.toHaveProperty('ts');
     });
 
-    it('should truncate long payloads in logs (implicit check via code structure logic)', async () => {
-      // It's hard to test the console.log output directly without complex spying setup,
-      // but we can verify the request still succeeds with a long payload.
+    it('should truncate long payloads in logs', async () => {
       const longString = 'a'.repeat(300);
       const payload = {
         type: 'test.event',
@@ -341,17 +339,23 @@ describe('Server', () => {
       // Only Heimgeist should receive 'test.event'
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      // We check that logger.info was called
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'test.event',
-          source: 'test-suite',
-          // The payload preview should be truncated in the log
-          // We can't easily check the exact string here because it's JSON stringified
-          // and might include structure, but we can check it was called.
-        }),
-        'Received event'
-      );
+      // Verify that logger.info was called with the truncated payload
+      const calls = (logger.info as jest.Mock).mock.calls;
+      const receivedEventLog = calls.find(args => args[1] === 'Received event');
+      expect(receivedEventLog).toBeDefined();
+
+      // Use non-null assertion consistent with codebase conventions
+      const logContext = receivedEventLog![0];
+
+      // Verify we found the correct log entry
+      expect(logContext.type).toBe('test.event');
+      expect(logContext.source).toBe('test-suite');
+
+      // Verify truncation semantics
+      const ELLIPSIS = '…';
+      expect(typeof logContext.payload).toBe('string');
+      expect(logContext.payload.endsWith(ELLIPSIS)).toBe(true);
+      expect(logContext.payload.length).toBe(LOG_PAYLOAD_PREVIEW_LENGTH + ELLIPSIS.length);
     });
 
     it('should trim whitespace from type and source before forwarding', async () => {
