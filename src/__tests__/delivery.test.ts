@@ -188,7 +188,7 @@ describe('Delivery Reliability', () => {
 
     it('should wait for flushFailedWrites to drain the queue', async () => {
         let resolveLock: ((val: any) => void) | undefined;
-        let lockCalledResolve: () => void;
+        let lockCalledResolve!: () => void;
         const lockCalled = new Promise<void>(r => { lockCalledResolve = r; });
 
         mockLock.mockImplementationOnce(() => {
@@ -200,7 +200,17 @@ describe('Delivery Reliability', () => {
         const savePromise = saveFailedEvent(event, 'test-consumer', 'err');
         const flushPromise = flushFailedWrites();
 
-        await lockCalled;
+        // Guard against infinite hang if lock is never called
+        let timeoutHandle: NodeJS.Timeout;
+        const failAfter = (ms: number) => new Promise((_, reject) => {
+            timeoutHandle = setTimeout(() => reject(new Error('Timeout waiting for lock acquisition')), ms);
+        });
+
+        try {
+            await Promise.race([lockCalled, failAfter(500)]);
+        } finally {
+            clearTimeout(timeoutHandle!);
+        }
 
         const raced = await Promise.race([
           flushPromise.then(() => 'flush'),
@@ -208,7 +218,10 @@ describe('Delivery Reliability', () => {
         ]);
         expect(raced).toBe('pending');
 
-        if (resolveLock) resolveLock(mockLockRelease);
+        if (!resolveLock) {
+            throw new Error('Lock promise resolver missing despite lockCalled resolving');
+        }
+        resolveLock(mockLockRelease);
 
         await flushPromise;
         await savePromise;
