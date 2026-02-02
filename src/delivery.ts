@@ -187,17 +187,59 @@ export async function initDelivery(): Promise<void> {
   }
 }
 
+interface QueueItem {
+  entry: FailedEvent;
+  resolve: () => void;
+  reject: (reason: any) => void;
+}
+
+const writeQueue: QueueItem[] = [];
+let isFlushing = false;
+
+function scheduleFlush() {
+  if (isFlushing) return;
+  setImmediate(processWriteQueue);
+}
+
+async function processWriteQueue() {
+  if (isFlushing || writeQueue.length === 0) return;
+  isFlushing = true;
+
+  const batch = writeQueue.splice(0, writeQueue.length);
+  const events = batch.map((i) => i.entry);
+
+  try {
+    await ensureDataDir();
+    await ensureLockFile();
+    await batchAppendEvents(events);
+
+    failedCount += events.length;
+    for (const e of events) {
+      lastError = e.error;
+      const n = new Date(e.nextAttempt).getTime();
+      if (!nextDueAt || n < new Date(nextDueAt).getTime()) {
+        nextDueAt = e.nextAttempt;
+      }
+    }
+
+    batch.forEach((i) => i.resolve());
+  } catch (err) {
+    logger.error({ err }, '[Reliability] Dropped batch events due to lock failure');
+    // Resolve anyway to match previous behavior (best-effort)
+    batch.forEach((i) => i.resolve());
+  } finally {
+    isFlushing = false;
+    if (writeQueue.length > 0) {
+      scheduleFlush();
+    }
+  }
+}
+
 export async function saveFailedEvent(
   event: PlexerEvent,
   consumerKey: string,
   error: string,
 ): Promise<void> {
-  await ensureDataDir();
-  await ensureLockFile();
-
-  const failedLog = getFailedLogPath();
-  const lockFile = getLockFilePath();
-
   const failedEvent: FailedEvent = {
     consumerKey,
     event,
@@ -219,31 +261,10 @@ export async function saveFailedEvent(
     return;
   }
 
-  const line = JSON.stringify(failedEvent) + '\n';
-
-  // Ensure file exists for appending
-  try {
-    await fs.access(failedLog);
-  } catch {
-    await fs.writeFile(failedLog, '');
-  }
-
-  let release;
-  try {
-    release = await lock(lockFile, { retries: 3 });
-    await fs.appendFile(failedLog, line, 'utf8');
-    failedCount++;
-    lastError = error;
-    // Update nextDueAt if this is sooner
-    const n = new Date(failedEvent.nextAttempt).getTime();
-    if (!nextDueAt || n < new Date(nextDueAt).getTime()) {
-      nextDueAt = failedEvent.nextAttempt;
-    }
-  } catch (err) {
-    logger.error({ err }, '[Reliability] Dropped event due to lock failure');
-  } finally {
-    if (release) await release();
-  }
+  return new Promise<void>((resolve, reject) => {
+    writeQueue.push({ entry: failedEvent, resolve, reject });
+    scheduleFlush();
+  });
 }
 
 export async function retryFailedEvents(): Promise<void> {

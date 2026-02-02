@@ -154,11 +154,22 @@ describe('Delivery Reliability', () => {
 
       await saveFailedEvent(event, 'test-consumer', 'some error');
 
-      expect(mockAppendFile).toHaveBeenCalledWith(
+      // Now uses batchAppendEvents which uses createWriteStream + pipeline
+      expect(mockCreateWriteStream).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
-        expect.stringContaining('"consumerKey":"test-consumer"'),
-        'utf8'
+        expect.objectContaining({ flags: 'a', encoding: 'utf8' })
       );
+
+      // Verify content via pipeline source
+      const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
+      const pipelineCall = pipelineCalls.pop();
+      expect(pipelineCall).toBeDefined();
+      const readable = pipelineCall[0] as Readable;
+      const chunks = [];
+      for await (const chunk of readable) chunks.push(chunk);
+      const content = chunks.join('');
+
+      expect(content).toContain('"consumerKey":"test-consumer"');
       expect(mockLock).toHaveBeenCalled();
       expect(mockLockRelease).toHaveBeenCalled();
     });
