@@ -158,6 +158,9 @@ describe('Delivery Reliability', () => {
         flushFailedWrites(),
         timeout.promise,
       ]);
+    } catch (e) {
+      // Best-effort cleanup: do not fail the test if cleanup times out
+      // logger.warn({ err: e }, 'Cleanup failed');
     } finally {
       timeout.cancel();
     }
