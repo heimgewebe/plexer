@@ -201,6 +201,7 @@ function scheduleFlush() {
   if (isFlushing || flushScheduled) return;
   flushScheduled = true;
   setImmediate(() => {
+    flushScheduled = false;
     void processWriteQueue().catch((err) => {
       logger.error({ err }, '[Reliability] processWriteQueue crashed');
     });
@@ -228,7 +229,6 @@ function notifyFlushWaitersIfDrained() {
 }
 
 async function processWriteQueue() {
-  flushScheduled = false;
   if (isFlushing || writeQueue.length === 0) {
     notifyFlushWaitersIfDrained();
     return;

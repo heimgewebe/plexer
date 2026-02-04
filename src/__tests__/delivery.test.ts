@@ -142,6 +142,24 @@ describe('Delivery Reliability', () => {
     mockCreateInterface.mockReturnValue(mockRl);
   });
 
+  const failAfter = (ms: number, msg: string) =>
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(msg)), ms).unref();
+    });
+
+  afterEach(async () => {
+    // Ensure any leftover queue items are drained to prevent state leakage between tests
+    try {
+        await Promise.race([
+            flushFailedWrites(),
+            failAfter(500, 'flushFailedWrites() did not drain (possible stuck lock/mock)'),
+        ]);
+    } catch (e) {
+        // Log but don't fail test if cleanup fails (it might be expected in some failure scenarios)
+        // logger.warn({ err: e }, 'Cleanup failed');
+    }
+  });
+
   const mockReadLines = (lines: string[]) => {
     const generator = async function* () {
       for (const line of lines) {
