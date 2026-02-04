@@ -142,21 +142,24 @@ describe('Delivery Reliability', () => {
     mockCreateInterface.mockReturnValue(mockRl);
   });
 
-  const failAfter = (ms: number, msg: string) =>
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(msg)), ms).unref();
+  const failAfter = (ms: number, msg: string) => {
+    let timeout: NodeJS.Timeout;
+    const promise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(msg)), ms);
     });
+    return { promise, cancel: () => clearTimeout(timeout) };
+  };
 
   afterEach(async () => {
     // Ensure any leftover queue items are drained to prevent state leakage between tests
+    const timeout = failAfter(500, 'flushFailedWrites() did not drain (possible stuck lock/mock)');
     try {
-        await Promise.race([
-            flushFailedWrites(),
-            failAfter(500, 'flushFailedWrites() did not drain (possible stuck lock/mock)'),
-        ]);
-    } catch (e) {
-        // Log but don't fail test if cleanup fails (it might be expected in some failure scenarios)
-        // logger.warn({ err: e }, 'Cleanup failed');
+      await Promise.race([
+        flushFailedWrites(),
+        timeout.promise,
+      ]);
+    } finally {
+      timeout.cancel();
     }
   });
 
@@ -222,15 +225,11 @@ describe('Delivery Reliability', () => {
         const flushPromise = flushFailedWrites();
 
         // Guard against infinite hang if lock is never called
-        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-        const failAfter = (ms: number) => new Promise((_, reject) => {
-            timeoutHandle = setTimeout(() => reject(new Error('Timeout waiting for lock acquisition')), ms);
-        });
-
+        const timeout = failAfter(500, 'Timeout waiting for lock acquisition');
         try {
-            await Promise.race([lockCalled, failAfter(500)]);
+            await Promise.race([lockCalled, timeout.promise]);
         } finally {
-            if (timeoutHandle) clearTimeout(timeoutHandle);
+            timeout.cancel();
         }
 
         if (!resolveLock) {
