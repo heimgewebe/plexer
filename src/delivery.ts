@@ -206,6 +206,7 @@ function scheduleFlush() {
 /**
  * Ensures all pending writes in the queue are flushed to disk.
  * Useful for graceful shutdowns and tests.
+ * Writes are batched in-memory; call flushFailedWrites() on shutdown or before retry rotation.
  */
 export async function flushFailedWrites(): Promise<void> {
   if (writeQueue.length === 0 && !isFlushing) return;
