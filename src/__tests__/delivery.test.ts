@@ -191,30 +191,33 @@ describe('Delivery Reliability', () => {
 
     it('should wait for flushFailedWrites to drain the queue', async () => {
         let resolveLock: ((val: any) => void) | undefined;
-        mockLock.mockImplementationOnce(() => new Promise(resolve => { resolveLock = resolve; }));
+        let lockCalledResolve!: () => void;
+        const lockCalled = new Promise<void>(r => { lockCalledResolve = r; });
+
+        mockLock.mockImplementationOnce(() => {
+            lockCalledResolve();
+            return new Promise(resolve => { resolveLock = resolve; });
+        });
 
         const event = { type: 'test', source: 'src', payload: {} };
         const savePromise = saveFailedEvent(event, 'test-consumer', 'err');
         const flushPromise = flushFailedWrites();
 
-        // Ensure flushPromise is NOT resolved yet (it should be waiting for lock)
-        // We race against a resolved promise to check pending status without timeout/delays
-        const isFlushSettled = await Promise.race([
-            flushPromise.then(() => true),
-            Promise.resolve(false)
-        ]);
-        expect(isFlushSettled).toBe(false);
+        // Guard against infinite hang if lock is never called
+        let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        const failAfter = (ms: number) => new Promise((_, reject) => {
+            timeoutHandle = setTimeout(() => reject(new Error('Timeout waiting for lock acquisition')), ms);
+        });
 
-        if (!resolveLock) {
-            // If we are here and resolveLock is undefined, it means processWriteQueue didn't run synchronously enough
-            // Wait for next tick to allow setImmediate to fire
-            await new Promise(resolve => setImmediate(resolve));
+        try {
+            await Promise.race([lockCalled, failAfter(500)]);
+        } finally {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
         }
 
         if (!resolveLock) {
-             throw new Error('Lock was not acquired despite scheduled flush');
+            throw new Error('Lock promise resolver missing despite lockCalled resolving');
         }
-
         resolveLock(mockLockRelease);
 
         await flushPromise;

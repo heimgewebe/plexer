@@ -200,7 +200,11 @@ const flushWaiters: (() => void)[] = [];
 function scheduleFlush() {
   if (isFlushing || flushScheduled) return;
   flushScheduled = true;
-  setImmediate(processWriteQueue);
+  setImmediate(() => {
+    void processWriteQueue().catch((err) => {
+      logger.error({ err }, '[Reliability] processWriteQueue crashed');
+    });
+  });
 }
 
 /**
