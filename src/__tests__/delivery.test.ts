@@ -143,11 +143,11 @@ describe('Delivery Reliability', () => {
   });
 
   const failAfter = (ms: number, msg: string) => {
-    let timeout: NodeJS.Timeout;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const promise = new Promise<never>((_, reject) => {
       timeout = setTimeout(() => reject(new Error(msg)), ms);
     });
-    return { promise, cancel: () => clearTimeout(timeout) };
+    return { promise, cancel: () => { if (timeout) clearTimeout(timeout); } };
   };
 
   afterEach(async () => {
