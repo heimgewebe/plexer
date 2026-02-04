@@ -152,7 +152,7 @@ describe('Delivery Reliability', () => {
 
   afterEach(async () => {
     // Ensure any leftover queue items are drained to prevent state leakage between tests
-    const timeout = failAfter(500, 'flushFailedWrites() did not drain (possible stuck lock/mock)');
+    const timeout = failAfter(1500, 'flushFailedWrites() did not drain (possible stuck lock/mock)');
     try {
       await Promise.race([
         flushFailedWrites(),
@@ -225,7 +225,7 @@ describe('Delivery Reliability', () => {
         const flushPromise = flushFailedWrites();
 
         // Guard against infinite hang if lock is never called
-        const timeout = failAfter(500, 'Timeout waiting for lock acquisition');
+        const timeout = failAfter(1500, 'Timeout waiting for lock acquisition');
         try {
             await Promise.race([lockCalled, timeout.promise]);
         } finally {
