@@ -42,11 +42,23 @@ async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
     crlfDelay: Infinity,
   });
 
+  let streamErr: unknown | null = null;
+  const onErr = (e: unknown) => {
+    streamErr = e;
+    rl.close();
+  };
+
+  stream.on('error', onErr);
+  rl.on('error', onErr);
+
   try {
     for await (const line of rl) {
       yield line;
     }
+    if (streamErr) throw streamErr;
   } finally {
+    stream.off('error', onErr);
+    rl.off('error', onErr);
     rl.close();
     stream.destroy();
   }

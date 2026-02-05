@@ -119,6 +119,7 @@ describe('Delivery Reliability', () => {
     // Setup stream/readline mocks
     mockStream = {
       on: jest.fn(),
+      off: jest.fn(),
       destroy: jest.fn(),
     };
     mockCreateReadStream.mockReturnValue(mockStream);
@@ -131,6 +132,7 @@ describe('Delivery Reliability', () => {
 
     mockRl = {
       on: jest.fn(),
+      off: jest.fn(),
       close: jest.fn(),
       [Symbol.asyncIterator]: jest.fn(),
     };
@@ -425,10 +427,25 @@ describe('Delivery Reliability', () => {
         // Mock renaming success
         mockRename.mockResolvedValue(undefined);
 
-        // Mock iterator throwing error simulating stream failure propagation via readline
+        // Setup a stream that emits error
+        mockStream.on.mockImplementation((event: string, cb: Function) => {
+            if (event === 'error') {
+                // Trigger callback immediately (synchronously) to simulate stream error
+                cb(new Error('Stream failure'));
+            }
+        });
+
+        // Ensure generator yields nothing and closes immediately (simulating break on error)
         mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {
-            throw new Error('Stream failure');
+             // In the real implementation, the error listener closes rl, causing this to finish
+             // We can just return empty here, the error check happens AFTER the loop
         })());
+
+        // However, our readLinesSafe logic expects the stream error to have happened either before or during.
+        // If we mock .on('error'), the callback runs immediately.
+        // Then `streamErr` is set.
+        // Then the loop runs (empty).
+        // Then `if (streamErr) throw` happens.
 
         await retryFailedEvents();
 
