@@ -427,44 +427,30 @@ describe('Delivery Reliability', () => {
         // Mock renaming success
         mockRename.mockResolvedValue(undefined);
 
-        // Setup a stream that emits error
+        // Simulate stream error immediately upon listener registration
         mockStream.on.mockImplementation((event: string, cb: Function) => {
-            if (event === 'error') {
-                // Trigger callback immediately (synchronously) to simulate stream error
-                cb(new Error('Stream failure'));
-            }
+            if (event === 'error') cb(new Error('Stream failure'));
         });
 
-        // Ensure generator yields nothing and closes immediately (simulating break on error)
-        mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {
-             // In the real implementation, the error listener closes rl, causing this to finish
-             // We can just return empty here, the error check happens AFTER the loop
-        })());
-
-        // However, our readLinesSafe logic expects the stream error to have happened either before or during.
-        // If we mock .on('error'), the callback runs immediately.
-        // Then `streamErr` is set.
-        // Then the loop runs (empty).
-        // Then `if (streamErr) throw` happens.
+        // Mock empty iterator (simulating loop termination via rl.close())
+        mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {})());
 
         await retryFailedEvents();
 
-        // Expect lock release to be called (finally block)
+        // Verify cleanup and error handling
         expect(mockLockRelease).toHaveBeenCalled();
-
-        // Expect logger error to be called with specific error
         expect(logger.error).toHaveBeenCalledWith(
             expect.objectContaining({ err: expect.any(Error) }),
             expect.stringContaining('Error processing failed events')
         );
 
-        // Verify Error Bridge cleanup
+        // Verify resource teardown
         expect(mockRl.close).toHaveBeenCalled();
         expect(mockStream.destroy).toHaveBeenCalled();
         expect(mockStream.off).toHaveBeenCalledWith('error', expect.any(Function));
         expect(mockRl.off).toHaveBeenCalledWith('error', expect.any(Function));
 
-        // Expect processing file NOT to be unlinked (crash recovery logic)
+        // File should NOT be unlinked (crash recovery)
         expect(mockUnlink).not.toHaveBeenCalled();
     });
 
