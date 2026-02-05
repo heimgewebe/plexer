@@ -165,13 +165,13 @@ describe('Server', () => {
       const expectedBody = JSON.stringify(payload);
 
       // Heimgeist: No token configured
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: expectedBody,
-      });
+      }));
 
       // Other consumers should not receive unknown event types
       const urls = fetchMock.mock.calls.map(([url]) => url);
@@ -197,43 +197,43 @@ describe('Server', () => {
       const expectedBody = JSON.stringify(payload);
 
       // Heimgeist
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: expectedBody,
-      });
+      }));
 
       // Leitstand
-      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer leitstand-secret-token',
         },
         body: expectedBody,
-      });
+      }));
 
       // hauski
-      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer hauski-secret-token',
         },
         body: expectedBody,
-      });
+      }));
 
       // Chronik
-      expect(fetchMock).toHaveBeenCalledWith('http://chronik.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://chronik.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Auth': 'chronik-secret-token',
         },
         body: expectedBody,
-      });
+      }));
 
       // Verify no errors or warnings for successful forward
       await new Promise(process.nextTick);
@@ -263,43 +263,43 @@ describe('Server', () => {
       const expectedBody = JSON.stringify(payload);
 
       // Heimgeist
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: expectedBody,
-      });
+      }));
 
       // Leitstand
-      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer leitstand-secret-token',
         },
         body: expectedBody,
-      });
+      }));
 
       // hauski
-      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer hauski-secret-token',
         },
         body: expectedBody,
-      });
+      }));
 
       // Chronik
-      expect(fetchMock).toHaveBeenCalledWith('http://chronik.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://chronik.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Auth': 'chronik-secret-token',
         },
         body: expectedBody,
-      });
+      }));
     });
 
     it('should forward body strictly without injected keys (pass-through guardrail)', async () => {
@@ -376,13 +376,13 @@ describe('Server', () => {
 
       // Since type is not 'knowledge.observatory.published.v1', only Heimgeist should be called
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: expectedBody,
-      });
+      }));
 
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -547,13 +547,13 @@ describe('Server', () => {
       const response = await request(app).post('/events').send(payload);
       expect(response.status).toBe(202);
 
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', {
+      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
-      });
+      }));
 
       // Verify that we are not trying to act as a file host (payload should be small)
       // The payload must be serializable for this test to pass logically

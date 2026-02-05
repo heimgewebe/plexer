@@ -6,6 +6,7 @@ import {
   BROADCAST_EVENTS,
   EVENT_INSIGHTS_DAILY_PUBLISHED,
   BEST_EFFORT_EVENTS,
+  HTTP_REQUEST_TIMEOUT_MS,
 } from './constants';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
@@ -314,6 +315,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
         method: 'POST',
         headers,
         body: serializedEvent,
+        signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
       })
         .then((response) => {
           const logData: Record<string, unknown> = {
