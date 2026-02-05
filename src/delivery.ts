@@ -44,7 +44,7 @@ async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
 
   let streamErr: unknown | null = null;
   const onErr = (e: unknown) => {
-    streamErr = e;
+    if (streamErr === null) streamErr = e;
     rl.close();
   };
 
