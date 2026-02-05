@@ -71,7 +71,7 @@ const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
 // Import subject under test
-import { saveFailedEvent, retryFailedEvents, initDelivery } from '../delivery';
+import { saveFailedEvent, retryFailedEvents, initDelivery, flushFailedWrites } from '../delivery';
 
 describe('Delivery Reliability', () => {
   let mockStream: any;
@@ -126,6 +126,9 @@ describe('Delivery Reliability', () => {
     mockDestStream = new Writable({ write: (c, e, cb) => cb() });
     mockCreateWriteStream.mockReturnValue(mockDestStream);
 
+    // Explicitly resolve pipeline to avoid hangs
+    mockPipeline.mockResolvedValue(undefined);
+
     mockRl = {
       on: jest.fn(),
       close: jest.fn(),
@@ -137,6 +140,30 @@ describe('Delivery Reliability', () => {
     mockRl[Symbol.asyncIterator].mockReturnValue(emptyGenerator());
 
     mockCreateInterface.mockReturnValue(mockRl);
+  });
+
+  const failAfter = (ms: number, msg: string) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const promise = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(msg)), ms);
+    });
+    return { promise, cancel: () => { if (timeout) clearTimeout(timeout); } };
+  };
+
+  afterEach(async () => {
+    // Ensure any leftover queue items are drained to prevent state leakage between tests
+    const timeout = failAfter(1500, 'flushFailedWrites() did not drain (possible stuck lock/mock)');
+    try {
+      await Promise.race([
+        flushFailedWrites(),
+        timeout.promise,
+      ]);
+    } catch (e) {
+      // Best-effort cleanup: do not fail the test if cleanup times out
+      // logger.warn({ err: e }, 'Cleanup failed');
+    } finally {
+      timeout.cancel();
+    }
   });
 
   const mockReadLines = (lines: string[]) => {
@@ -154,11 +181,25 @@ describe('Delivery Reliability', () => {
 
       await saveFailedEvent(event, 'test-consumer', 'some error');
 
-      expect(mockAppendFile).toHaveBeenCalledWith(
+      // Explicitly wait for flush to ensure deterministic verification of pipeline calls
+      await flushFailedWrites();
+
+      // Now uses batchAppendEvents which uses createWriteStream + pipeline
+      expect(mockCreateWriteStream).toHaveBeenCalledWith(
         expect.stringContaining('failed_forwards.jsonl'),
-        expect.stringContaining('"consumerKey":"test-consumer"'),
-        'utf8'
+        expect.objectContaining({ flags: 'a', encoding: 'utf8' })
       );
+
+      // Verify content via pipeline source
+      const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
+      const pipelineCall = pipelineCalls.pop();
+      expect(pipelineCall).toBeDefined();
+      const readable = pipelineCall[0] as Readable;
+      const chunks = [];
+      for await (const chunk of readable) chunks.push(chunk);
+      const content = chunks.join('');
+
+      expect(content).toContain('"consumerKey":"test-consumer"');
       expect(mockLock).toHaveBeenCalled();
       expect(mockLockRelease).toHaveBeenCalled();
     });
@@ -169,7 +210,40 @@ describe('Delivery Reliability', () => {
        // Pass invalid event (schema check happens inside saveFailedEvent)
        await saveFailedEvent(invalidEvent, 'test-consumer', 'err');
 
-       expect(mockAppendFile).not.toHaveBeenCalled();
+       expect(mockCreateWriteStream).not.toHaveBeenCalled();
+    });
+
+    it('should wait for flushFailedWrites to drain the queue', async () => {
+        let resolveLock: ((val: any) => void) | undefined;
+        let lockCalledResolve!: () => void;
+        const lockCalled = new Promise<void>(r => { lockCalledResolve = r; });
+
+        mockLock.mockImplementationOnce(() => {
+            lockCalledResolve();
+            return new Promise(resolve => { resolveLock = resolve; });
+        });
+
+        const event = { type: 'test', source: 'src', payload: {} };
+        const savePromise = saveFailedEvent(event, 'test-consumer', 'err');
+        const flushPromise = flushFailedWrites();
+
+        // Guard against infinite hang if lock is never called
+        const timeout = failAfter(1500, 'Timeout waiting for lock acquisition');
+        try {
+            await Promise.race([lockCalled, timeout.promise]);
+        } finally {
+            timeout.cancel();
+        }
+
+        if (!resolveLock) {
+            throw new Error('Lock promise resolver missing despite lockCalled resolving');
+        }
+        resolveLock(mockLockRelease);
+
+        await flushPromise;
+        await savePromise;
+
+        expect(mockCreateWriteStream).toHaveBeenCalled();
     });
   });
 
