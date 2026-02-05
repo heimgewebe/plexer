@@ -106,9 +106,6 @@ export async function initDelivery(): Promise<void> {
       let release;
       try {
         release = await lock(lockFile, { retries: 3 });
-        // Ensure FAILED_LOG exists
-        try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
-
         for (const file of processingFiles) {
           const filePath = path.join(dataDir, file);
           try {
@@ -312,14 +309,6 @@ export async function retryFailedEvents(): Promise<void> {
   const dataDir = getDataDir();
   const failedLog = getFailedLogPath();
   const lockFile = getLockFilePath();
-
-  // Ensure file exists
-  try {
-    await fs.access(failedLog);
-  } catch {
-    await fs.writeFile(failedLog, '');
-    return;
-  }
 
   let release;
   let processingFile: string | null = null;

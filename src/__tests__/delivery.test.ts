@@ -454,6 +454,27 @@ describe('Delivery Reliability', () => {
         // Expect processing file NOT to be unlinked (crash recovery logic)
         expect(mockUnlink).not.toHaveBeenCalled();
     });
+
+    it('should gracefully handle missing failed log (no crash)', async () => {
+      // Mock stat failing (file missing)
+      const err: any = new Error('ENOENT: no such file or directory');
+      err.code = 'ENOENT';
+      mockStat.mockRejectedValueOnce(err);
+
+      await retryFailedEvents();
+
+      // Should check stat
+      expect(mockStat).toHaveBeenCalled();
+
+      // Should NOT rename
+      expect(mockRename).not.toHaveBeenCalled();
+
+      // Should NOT fetch
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      // Should release lock
+      expect(mockLockRelease).toHaveBeenCalled();
+    });
   });
 
   describe('initDelivery', () => {
