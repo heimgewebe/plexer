@@ -425,19 +425,9 @@ describe('Delivery Reliability', () => {
         // Mock renaming success
         mockRename.mockResolvedValue(undefined);
 
-        // Setup a stream that emits error
-        mockStream.on.mockImplementation((event: string, cb: Function) => {
-            if (event === 'error') {
-                // Trigger callback immediately (synchronously)
-                cb(new Error('Stream failure'));
-            }
-        });
-
-        // Ensure generator allows the error to propagate
+        // Mock iterator throwing error simulating stream failure propagation via readline
         mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {
-            // Yield nothing; keep pending so the error event (via Promise.race) wins the race.
-            // Use a short timeout (50ms) to ensure we don't hang CI if the error fails to trigger.
-            await new Promise(r => setTimeout(r, 50));
+            throw new Error('Stream failure');
         })());
 
         await retryFailedEvents();

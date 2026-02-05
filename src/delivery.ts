@@ -42,18 +42,9 @@ async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
     crlfDelay: Infinity,
   });
 
-  const errorPromise = new Promise<never>((_, reject) => {
-    stream.on('error', reject);
-    rl.on('error', reject);
-  });
-
-  const iterator = rl[Symbol.asyncIterator]();
-
   try {
-    while (true) {
-      const result = await Promise.race([iterator.next(), errorPromise]);
-      if (result.done) return;
-      yield result.value;
+    for await (const line of rl) {
+      yield line;
     }
   } finally {
     rl.close();
