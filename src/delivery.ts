@@ -359,7 +359,8 @@ export async function retryFailedEvents(): Promise<void> {
 
     // Use parallelization to increase retry throughput
     const limit = pLimit(config.retryConcurrency);
-    let chunkPromises: Promise<FailedEvent | null>[] = [];
+    // Use a Set to track active promises for sliding window backpressure
+    const activePromises = new Set<Promise<void>>();
 
     for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
@@ -374,7 +375,7 @@ export async function retryFailedEvents(): Promise<void> {
       const nextTime = new Date(entry.nextAttempt).getTime();
 
       if (nextTime <= now) {
-        chunkPromises.push(limit(async (): Promise<FailedEvent | null> => {
+        const promise = limit(async (): Promise<FailedEvent | null> => {
           const attemptNow = Date.now();
           // Try to send
           const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
@@ -445,29 +446,29 @@ export async function retryFailedEvents(): Promise<void> {
 
             return entry;
           }
-        }));
+        }).then((res) => {
+          if (res) remainingEvents.push(res);
+        });
+
+        // Wrap to handle removal from Set upon completion
+        const wrapper = promise.then(() => {
+          activePromises.delete(wrapper);
+        });
+        activePromises.add(wrapper);
+
+        // Backpressure: Wait if too many active promises
+        if (activePromises.size >= config.retryBatchSize) {
+          await Promise.race(activePromises);
+        }
       } else {
         // Not time yet -> Re-queue
         remainingEvents.push(entry);
       }
-
-      // Process chunk if size limit reached
-      // This chunking prevents unbounded promise accumulation in memory (backpressure)
-      if (chunkPromises.length >= config.retryBatchSize) {
-        const results = await Promise.all(chunkPromises);
-        for (const res of results) {
-          if (res) remainingEvents.push(res);
-        }
-        chunkPromises = [];
-      }
     }
 
-    // Process remaining promises in the last chunk
-    if (chunkPromises.length > 0) {
-      const results = await Promise.all(chunkPromises);
-      for (const res of results) {
-        if (res) remainingEvents.push(res);
-      }
+    // Wait for all remaining active promises to complete
+    if (activePromises.size > 0) {
+      await Promise.all(activePromises);
     }
 
     // Batch write remaining events first (crash safety)
