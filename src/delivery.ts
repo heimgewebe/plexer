@@ -13,6 +13,7 @@ import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
 import { logger } from './logger';
+import { HTTP_REQUEST_TIMEOUT_MS } from './constants';
 // NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
 import pLimit from 'p-limit';
 
@@ -397,6 +398,7 @@ export async function retryFailedEvents(): Promise<void> {
               method: 'POST',
               headers,
               body: JSON.stringify(entry.event),
+              signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
             });
 
             if (!res.ok) {

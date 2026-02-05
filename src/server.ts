@@ -6,6 +6,7 @@ import {
   BROADCAST_EVENTS,
   EVENT_INSIGHTS_DAILY_PUBLISHED,
   BEST_EFFORT_EVENTS,
+  HTTP_REQUEST_TIMEOUT_MS,
 } from './constants';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
@@ -19,7 +20,6 @@ import {
 
 const MAX_STRING_LENGTH = 256;
 export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
-export const HTTP_REQUEST_TIMEOUT_MS = 5000;
 
 const pendingFetches = new Set<Promise<void>>();
 
