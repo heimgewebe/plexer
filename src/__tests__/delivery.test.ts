@@ -146,8 +146,9 @@ describe('Delivery Reliability', () => {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const promise = new Promise<never>((_, reject) => {
       timeout = setTimeout(() => reject(new Error(msg)), ms);
-      if (timeout && typeof (timeout as any).unref === 'function') {
-        (timeout as any).unref();
+      const t = timeout as unknown as { unref?: () => void };
+      if (t && typeof t.unref === 'function') {
+        t.unref();
       }
     });
     return { promise, cancel: () => { if (timeout) clearTimeout(timeout); } };
