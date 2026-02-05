@@ -147,7 +147,7 @@ describe('Delivery Reliability', () => {
     const promise = new Promise<never>((_, reject) => {
       timeout = setTimeout(() => reject(new Error(msg)), ms);
       const t = timeout as unknown as { unref?: () => void };
-      if (t && typeof t.unref === 'function') {
+      if (typeof t.unref === 'function') {
         t.unref();
       }
     });
