@@ -469,6 +469,9 @@ describe('Delivery Reliability', () => {
 
       // Should NOT fetch
       expect(mockFetch).not.toHaveBeenCalled();
+
+      // Should release lock
+      expect(mockLockRelease).toHaveBeenCalled();
     });
   });
 
