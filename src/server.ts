@@ -19,6 +19,7 @@ import {
 
 const MAX_STRING_LENGTH = 256;
 export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
+export const HTTP_REQUEST_TIMEOUT_MS = 5000;
 
 const pendingFetches = new Set<Promise<void>>();
 
@@ -314,6 +315,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
         method: 'POST',
         headers,
         body: serializedEvent,
+        signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
       })
         .then((response) => {
           const logData: Record<string, unknown> = {
