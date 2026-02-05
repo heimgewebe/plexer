@@ -35,6 +35,14 @@ const validateFailedEvent = ajv.compile(failedEventSchema);
 export const validateDeliveryReport = ajv.compile(deliveryReportSchema);
 export const validateEventEnvelope = ajv.compile(eventEnvelopeSchema);
 
+function detach(emitter: any, event: string, listener: (...args: any[]) => void) {
+  if (typeof emitter.off === 'function') {
+    emitter.off(event, listener);
+  } else if (typeof emitter.removeListener === 'function') {
+    emitter.removeListener(event, listener);
+  }
+}
+
 async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
   const stream = createReadStream(filePath);
   const rl = readline.createInterface({
@@ -57,8 +65,8 @@ async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
     }
     if (streamErr) throw streamErr;
   } finally {
-    stream.off('error', onErr);
-    rl.off('error', onErr);
+    detach(stream, 'error', onErr);
+    detach(rl, 'error', onErr);
     rl.close();
     stream.destroy();
   }
