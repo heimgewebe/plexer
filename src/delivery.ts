@@ -361,6 +361,7 @@ export async function retryFailedEvents(): Promise<void> {
     const limit = pLimit(config.retryConcurrency);
     // Use a Set to track active promises for sliding window backpressure
     const activePromises = new Set<Promise<void>>();
+    const windowSize = config.retryBatchSize; // legacy name: used as sliding-window size (buffer)
 
     for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
@@ -375,6 +376,11 @@ export async function retryFailedEvents(): Promise<void> {
       const nextTime = new Date(entry.nextAttempt).getTime();
 
       if (nextTime <= now) {
+        // Backpressure: Wait BEFORE adding if too many active promises
+        while (activePromises.size >= windowSize) {
+          await Promise.race(activePromises);
+        }
+
         const promise = limit(async (): Promise<FailedEvent | null> => {
           const attemptNow = Date.now();
           // Try to send
@@ -446,20 +452,20 @@ export async function retryFailedEvents(): Promise<void> {
 
             return entry;
           }
-        }).then((res) => {
-          if (res) remainingEvents.push(res);
         });
 
-        // Wrap to handle removal from Set upon completion
-        const wrapper = promise.then(() => {
-          activePromises.delete(wrapper);
-        });
+        // Wrap to handle removal from Set upon completion (robust cleanup)
+        const wrapper = promise
+          .then((res) => {
+            if (res) remainingEvents.push(res);
+          })
+          .catch((err) => {
+            logger.error({ err }, '[Reliability] Retry wrapper error');
+          })
+          .finally(() => {
+            activePromises.delete(wrapper);
+          });
         activePromises.add(wrapper);
-
-        // Backpressure: Wait if too many active promises
-        if (activePromises.size >= config.retryBatchSize) {
-          await Promise.race(activePromises);
-        }
       } else {
         // Not time yet -> Re-queue
         remainingEvents.push(entry);
