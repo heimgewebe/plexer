@@ -382,74 +382,80 @@ export async function retryFailedEvents(): Promise<void> {
         }
 
         const promise = limit(async (): Promise<FailedEvent | null> => {
-          const attemptNow = Date.now();
-          // Try to send
-          const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
-          if (!consumer || !consumer.url) {
-            // Backoff
-            entry.retryCount++;
-            // Jitter backoff
-            const backoff = Math.min(
-              Math.pow(2, entry.retryCount) * 60 * 1000,
-              24 * 60 * 60 * 1000,
-            );
-            // 0-10s jitter
-            const jitter = Math.random() * 10000;
-            entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
-            entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
-
-            // Metrics fallback
-            entry.lastAttempt = new Date().toISOString();
-
-            return entry;
-          }
-
           try {
-            const headers: Record<string, string> = {
-              'Content-Type': 'application/json',
-            };
-            if (consumer.token) {
-              Object.assign(headers, getAuthHeaders(consumer.authKind, consumer.token, consumer.key));
+            const attemptNow = Date.now();
+            // Try to send
+            const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
+            if (!consumer || !consumer.url) {
+              // Backoff
+              entry.retryCount++;
+              // Jitter backoff
+              const backoff = Math.min(
+                Math.pow(2, entry.retryCount) * 60 * 1000,
+                24 * 60 * 60 * 1000,
+              );
+              // 0-10s jitter
+              const jitter = Math.random() * 10000;
+              entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
+              entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
+
+              // Metrics fallback
+              entry.lastAttempt = new Date().toISOString();
+
+              return entry;
             }
 
-            const res = await fetch(consumer.url!, {
-              method: 'POST',
-              headers,
-              body: JSON.stringify(entry.event),
-              signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
-            });
+            try {
+              const headers: Record<string, string> = {
+                'Content-Type': 'application/json',
+              };
+              if (consumer.token) {
+                Object.assign(headers, getAuthHeaders(consumer.authKind, consumer.token, consumer.key));
+              }
 
-            if (!res.ok) {
-              let msg = `${res.status} ${res.statusText}`;
-              if (res.status === 401 || res.status === 403)
-                msg += ' (token rejected)';
-              throw new Error(msg);
+              const res = await fetch(consumer.url!, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(entry.event),
+                signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
+              });
+
+              if (!res.ok) {
+                let msg = `${res.status} ${res.statusText}`;
+                if (res.status === 401 || res.status === 403)
+                  msg += ' (token rejected)';
+                throw new Error(msg);
+              }
+
+              logger.info(
+                { type: entry.event.type, label: consumer.label },
+                `[Retry] Successfully forwarded event ${entry.event.type} to ${consumer.label}`,
+              );
+              // Success: return null to indicate removal
+              return null;
+            } catch (err) {
+              entry.retryCount++;
+              entry.lastAttempt = new Date().toISOString();
+              const backoff = Math.min(
+                Math.pow(2, entry.retryCount) * 60 * 1000,
+                24 * 60 * 60 * 1000,
+              );
+              // 0-10s jitter
+              const jitter = Math.random() * 10000;
+              entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
+              entry.error = err instanceof Error ? err.message : String(err);
+              lastError = entry.error;
+
+              logger.warn(
+                { label: consumer.label, error: entry.error },
+                `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
+              );
+
+              return entry;
             }
-
-            logger.info(
-              { type: entry.event.type, label: consumer.label },
-              `[Retry] Successfully forwarded event ${entry.event.type} to ${consumer.label}`,
-            );
-            // Success: return null to indicate removal
-            return null;
-          } catch (err) {
-            entry.retryCount++;
-            entry.lastAttempt = new Date().toISOString();
-            const backoff = Math.min(
-              Math.pow(2, entry.retryCount) * 60 * 1000,
-              24 * 60 * 60 * 1000,
-            );
-            // 0-10s jitter
-            const jitter = Math.random() * 10000;
-            entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
-            entry.error = err instanceof Error ? err.message : String(err);
-            lastError = entry.error;
-
-            logger.warn(
-              { label: consumer.label, error: entry.error },
-              `[Retry] Failed to forward to ${consumer.label}: ${entry.error}`,
-            );
-
+          } catch (e) {
+            // Safety net: ensure we never reject, effectively "requeue" the entry
+            logger.error({ err: e }, '[Reliability] Uncaught error in retry task');
             return entry;
           }
         });
@@ -459,8 +465,9 @@ export async function retryFailedEvents(): Promise<void> {
           .then((res) => {
             if (res) remainingEvents.push(res);
           })
+          // promise never rejects now, but keep catch as defensive programming
           .catch((err) => {
-            logger.error({ err }, '[Reliability] Retry wrapper error');
+            logger.error({ err }, '[Reliability] Retry wrapper error (should never happen)');
           })
           .finally(() => {
             activePromises.delete(wrapper);
