@@ -35,6 +35,14 @@ const validateFailedEvent = ajv.compile(failedEventSchema);
 export const validateDeliveryReport = ajv.compile(deliveryReportSchema);
 export const validateEventEnvelope = ajv.compile(eventEnvelopeSchema);
 
+function detach(emitter: any, event: string, listener: (...args: any[]) => void) {
+  if (typeof emitter.off === 'function') {
+    emitter.off(event, listener);
+  } else if (typeof emitter.removeListener === 'function') {
+    emitter.removeListener(event, listener);
+  }
+}
+
 async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
   const stream = createReadStream(filePath);
   const rl = readline.createInterface({
@@ -42,20 +50,23 @@ async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
     crlfDelay: Infinity,
   });
 
-  const errorPromise = new Promise<never>((_, reject) => {
-    stream.on('error', reject);
-    rl.on('error', reject);
-  });
+  let streamErr: unknown | null = null;
+  const onErr = (e: unknown) => {
+    if (streamErr === null) streamErr = e;
+    rl.close();
+  };
 
-  const iterator = rl[Symbol.asyncIterator]();
+  stream.on('error', onErr);
+  rl.on('error', onErr);
 
   try {
-    while (true) {
-      const result = await Promise.race([iterator.next(), errorPromise]);
-      if (result.done) return;
-      yield result.value;
+    for await (const line of rl) {
+      yield line;
     }
+    if (streamErr) throw streamErr;
   } finally {
+    detach(stream, 'error', onErr);
+    detach(rl, 'error', onErr);
     rl.close();
     stream.destroy();
   }

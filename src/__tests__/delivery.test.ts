@@ -119,6 +119,8 @@ describe('Delivery Reliability', () => {
     // Setup stream/readline mocks
     mockStream = {
       on: jest.fn(),
+      off: jest.fn(),
+      removeListener: jest.fn(),
       destroy: jest.fn(),
     };
     mockCreateReadStream.mockReturnValue(mockStream);
@@ -131,6 +133,8 @@ describe('Delivery Reliability', () => {
 
     mockRl = {
       on: jest.fn(),
+      off: jest.fn(),
+      removeListener: jest.fn(),
       close: jest.fn(),
       [Symbol.asyncIterator]: jest.fn(),
     };
@@ -425,33 +429,34 @@ describe('Delivery Reliability', () => {
         // Mock renaming success
         mockRename.mockResolvedValue(undefined);
 
-        // Setup a stream that emits error
+        // Simulate stream error immediately upon listener registration
         mockStream.on.mockImplementation((event: string, cb: Function) => {
-            if (event === 'error') {
-                // Trigger callback immediately (synchronously)
-                cb(new Error('Stream failure'));
-            }
+            if (event === 'error') cb(new Error('Stream failure'));
         });
 
-        // Ensure generator allows the error to propagate
-        mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {
-            // Yield nothing; keep pending so the error event (via Promise.race) wins the race.
-            // Use a short timeout (50ms) to ensure we don't hang CI if the error fails to trigger.
-            await new Promise(r => setTimeout(r, 50));
-        })());
+        // Mock empty iterator (simulating loop termination via rl.close())
+        mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {})());
 
         await retryFailedEvents();
 
-        // Expect lock release to be called (finally block)
+        // Verify cleanup and error handling
         expect(mockLockRelease).toHaveBeenCalled();
-
-        // Expect logger error to be called with specific error
         expect(logger.error).toHaveBeenCalledWith(
             expect.objectContaining({ err: expect.any(Error) }),
             expect.stringContaining('Error processing failed events')
         );
 
-        // Expect processing file NOT to be unlinked (crash recovery logic)
+        // Verify resource teardown
+        expect(mockRl.close).toHaveBeenCalled();
+        expect(mockStream.destroy).toHaveBeenCalled();
+
+        // Verify detach (off OR removeListener called)
+        const streamDetached = mockStream.off.mock.calls.length + mockStream.removeListener.mock.calls.length;
+        const rlDetached = mockRl.off.mock.calls.length + mockRl.removeListener.mock.calls.length;
+        expect(streamDetached).toBeGreaterThan(0);
+        expect(rlDetached).toBeGreaterThan(0);
+
+        // File should NOT be unlinked (crash recovery)
         expect(mockUnlink).not.toHaveBeenCalled();
     });
 
