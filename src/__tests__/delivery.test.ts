@@ -457,7 +457,9 @@ describe('Delivery Reliability', () => {
 
     it('should gracefully handle missing failed log (no crash)', async () => {
       // Mock stat failing (file missing)
-      mockStat.mockRejectedValueOnce({ code: 'ENOENT' });
+      const err: any = new Error('ENOENT: no such file or directory');
+      err.code = 'ENOENT';
+      mockStat.mockRejectedValueOnce(err);
 
       await retryFailedEvents();
 
