@@ -359,9 +359,10 @@ export async function retryFailedEvents(): Promise<void> {
 
     // Use parallelization to increase retry throughput
     const limit = pLimit(config.retryConcurrency);
-    // Use a Set to track active promises for sliding window backpressure
+    // Use a Set to track active wrapper promises (void) for sliding window backpressure & cleanup
     const activePromises = new Set<Promise<void>>();
-    const windowSize = config.retryBatchSize; // legacy name: used as sliding-window size (buffer)
+    // Ensure windowSize is at least 1 to prevent deadlock; legacy name: used as sliding-window buffer size
+    const windowSize = Math.max(1, config.retryBatchSize);
 
     for await (const line of readLinesSafe(processingFile)) {
       if (!line.trim()) continue;
