@@ -458,6 +458,12 @@ describe('Delivery Reliability', () => {
             expect.stringContaining('Error processing failed events')
         );
 
+        // Verify Error Bridge cleanup
+        expect(mockRl.close).toHaveBeenCalled();
+        expect(mockStream.destroy).toHaveBeenCalled();
+        expect(mockStream.off).toHaveBeenCalledWith('error', expect.any(Function));
+        expect(mockRl.off).toHaveBeenCalledWith('error', expect.any(Function));
+
         // Expect processing file NOT to be unlinked (crash recovery logic)
         expect(mockUnlink).not.toHaveBeenCalled();
     });
