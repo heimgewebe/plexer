@@ -10,7 +10,8 @@ import {
 } from './constants';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
-import pLimit from 'p-limit';
+import * as pLimitMod from 'p-limit';
+const pLimit = (pLimitMod as any).default || pLimitMod;
 import { logger } from './logger';
 import {
   saveFailedEvent,
@@ -24,7 +25,7 @@ export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
 
 const pendingFetches = new Set<Promise<void>>();
 // Guard against invalid environment values (ensure at least 1)
-const forwardLimit = pLimit(Math.max(1, config.forwardConcurrency));
+const forwardLimit = (pLimit as any)(Math.max(1, config.forwardConcurrency));
 
 type TryJsonResult =
   | { kind: 'ok'; json: string }
