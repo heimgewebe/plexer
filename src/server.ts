@@ -401,7 +401,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
               payload,
             },
             key,
-            error instanceof Error ? error.message : String(error),
+            errorDetail,
           ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
           logger.error(context, errorMessage);
         }
@@ -409,7 +409,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
     });
 
     pendingFetches.add(task);
-    task.finally(() => {
+    void task.finally(() => {
       pendingFetches.delete(task);
     });
   });
