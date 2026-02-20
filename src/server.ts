@@ -23,7 +23,8 @@ const MAX_STRING_LENGTH = 256;
 export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
 
 const pendingFetches = new Set<Promise<void>>();
-const forwardLimit = pLimit(config.forwardConcurrency);
+// Guard against invalid environment values (ensure at least 1)
+const forwardLimit = pLimit(Math.max(1, config.forwardConcurrency));
 
 type TryJsonResult =
   | { kind: 'ok'; json: string }
@@ -362,7 +363,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
             context.log_kind = 'best_effort_forward_failed';
             logger.warn(context, `[Best-Effort] ${errorMessage}`);
           } else {
-            // Await here to include save operation in concurrency window & pending tracking
+            // Intentional durability policy: await persistence before slot release
             await saveFailedEvent(
               {
                 type,
@@ -376,11 +377,12 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
           }
         }
       } catch (error) {
-        const errorMessage = `Error forwarding event to ${label}:`;
+        const errorDetail = error instanceof Error ? error.message : String(error);
+        const errorMessage = `Error forwarding event to ${label}: ${errorDetail}`;
         const context: Record<string, unknown> = {
           label,
           type,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorDetail,
         };
 
         // Reliability Policy (same as above)
@@ -391,6 +393,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
           context.log_kind = 'best_effort_forward_failed';
           logger.warn(context, `[Best-Effort] ${errorMessage}`);
         } else {
+          // Intentional durability policy: await persistence before slot release
           await saveFailedEvent(
             {
               type,
@@ -405,9 +408,9 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
       }
     });
 
-    const trackedPromise = task.finally(() => {
-      pendingFetches.delete(trackedPromise);
+    pendingFetches.add(task);
+    task.finally(() => {
+      pendingFetches.delete(task);
     });
-    pendingFetches.add(trackedPromise);
   });
 }
