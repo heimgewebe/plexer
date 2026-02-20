@@ -13,6 +13,7 @@ export interface Config {
   dataDir: string;
   retryConcurrency: number;
   retryBatchSize: number;
+  forwardConcurrency: number;
 }
 
 const getEnv = (name: string): string | undefined => {
@@ -99,6 +100,12 @@ const retryBatchSize = validateInt(
   50,
 );
 
+const forwardConcurrency = validateInt(
+  'FORWARD_CONCURRENCY',
+  getEnv('FORWARD_CONCURRENCY'),
+  10,
+);
+
 export const config: Config = {
   port: parsedPort,
   host: getEnv('HOST') || '0.0.0.0',
@@ -115,4 +122,5 @@ export const config: Config = {
   dataDir: getEnv('PLEXER_DATA_DIR') || 'data',
   retryConcurrency,
   retryBatchSize,
+  forwardConcurrency,
 };
