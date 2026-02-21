@@ -356,8 +356,8 @@ export async function retryFailedEvents(): Promise<void> {
         throw new Error('[Reliability] Processing file not defined despite lock acquisition');
     }
 
-    // Use parallelization to increase retry throughput; clamp to prevent deadlocks or missing mocks
-    const limit = pLimit(Math.max(1, config.retryConcurrency || 5));
+    // Use parallelization to increase retry throughput; clamp to prevent deadlocks
+    const limit = pLimit(Math.max(1, config.retryConcurrency));
     // Use a Set to track active wrapper promises (void) for sliding window backpressure & cleanup
     const activePromises = new Set<Promise<void>>();
     // Ensure windowSize is at least 1 to prevent deadlock; legacy name: used as sliding-window buffer size

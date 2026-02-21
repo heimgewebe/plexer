@@ -23,8 +23,8 @@ const MAX_STRING_LENGTH = 256;
 export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
 
 const pendingFetches = new Set<Promise<void>>();
-// Guard against invalid environment values or missing mocks in tests (ensure at least 1)
-const forwardLimit = pLimit(Math.max(1, config.forwardConcurrency || 10));
+// Guard against invalid environment values (ensure at least 1)
+const forwardLimit = pLimit(Math.max(1, config.forwardConcurrency));
 
 type TryJsonResult =
   | { kind: 'ok'; json: string }
