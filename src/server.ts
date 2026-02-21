@@ -235,12 +235,14 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   const effectivePayload = payload === undefined ? null : payload;
   const jsonResult = tryJson(effectivePayload);
 
-  const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : 0;
+  const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : null;
+  const payloadSizeKind = jsonResult.kind === 'ok' ? 'json' : 'unavailable';
 
   logger.info({
     type,
     source,
     payload_size: payloadSize,
+    payload_size_kind: payloadSizeKind,
   }, 'Received event');
 
   // Soft-guard for notification-only events

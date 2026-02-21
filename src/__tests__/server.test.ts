@@ -354,6 +354,7 @@ describe('Server', () => {
       // Verify that payload content is not logged and size is present
       expect(logContext.payload).toBeUndefined();
       expect(logContext.payload_size).toBeGreaterThan(300);
+      expect(logContext.payload_size_kind).toBe('json');
     });
 
     it('should trim whitespace from type and source before forwarding', async () => {
@@ -683,6 +684,7 @@ describe('Server', () => {
     it('should drop and log error for events with non-JSON-encodable payloads (e.g. functions)', async () => {
       // Ensure mock state is clean for this test
       fetchMock.mockClear();
+      (logger.info as jest.Mock).mockClear();
 
       // We can't send a function over HTTP JSON, so we have to bypass supertest/express body parsing
       // and call processEvent directly to test this edge case in the logic layer.
@@ -694,6 +696,12 @@ describe('Server', () => {
 
       // @ts-ignore - explicitly testing invalid payload type
       await processEvent(payloadWithFunction);
+
+      // Verify "Received event" log
+      const receivedEventLog = (logger.info as jest.Mock).mock.calls.find(args => args[1] === 'Received event');
+      expect(receivedEventLog).toBeDefined();
+      expect(receivedEventLog![0].payload_size).toBeNull();
+      expect(receivedEventLog![0].payload_size_kind).toBe('unavailable');
 
       expect(logger.error).toHaveBeenCalledWith(
         expect.objectContaining({
