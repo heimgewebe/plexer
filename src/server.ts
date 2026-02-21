@@ -240,6 +240,8 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : null;
   const payloadSizeKind: PayloadSizeKind = jsonResult.kind === 'ok' ? 'json' : 'unavailable';
 
+  // Security: Payload content is never logged to prevent sensitive data leaks.
+  // We only log the size and kind for observability.
   logger.info({
     type,
     source,

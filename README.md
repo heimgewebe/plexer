@@ -107,3 +107,5 @@ Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports 
 - `GET /status`: Liefert Metriken zur Delivery-Queue.
   - Payload folgt dem Contract: `plexer.delivery.report.v1`.
   - Felder: `pending` (in-flight), `failed` (in queue), `retryable_now` (fällig), `next_due_at` (nächster Retry).
+
+- **Event Logging**: Eingehende Events werden protokolliert. Aus Sicherheitsgründen (Privacy/Data Leak Prevention) werden dabei **keine Payload-Inhalte** geloggt, sondern nur die Metadaten `payload_size` und `payload_size_kind`.
