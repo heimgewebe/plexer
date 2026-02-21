@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { createServer, processEvent, LOG_PAYLOAD_PREVIEW_LENGTH } from '../server';
+import { createServer, processEvent } from '../server';
 import { config } from '../config';
 
 // Mock logger
@@ -28,6 +28,9 @@ jest.mock('../config', () => ({
     hauskiToken: 'hauski-secret-token',
     chronikToken: 'chronik-secret-token',
     dataDir: 'data',
+    forwardConcurrency: 10,
+    retryConcurrency: 5,
+    retryBatchSize: 50,
   },
 }));
 
@@ -326,7 +329,7 @@ describe('Server', () => {
       expect(requestBody).not.toHaveProperty('ts');
     });
 
-    it('should truncate long payloads in logs', async () => {
+    it('should log payload size instead of content in logs', async () => {
       const longString = 'a'.repeat(300);
       const payload = {
         type: 'test.event',
@@ -339,7 +342,7 @@ describe('Server', () => {
       // Only Heimgeist should receive 'test.event'
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      // Verify that logger.info was called with the truncated payload
+      // Verify that logger.info was called with the payload size
       const calls = (logger.info as jest.Mock).mock.calls;
       const receivedEventLog = calls.find(args => args[1] === 'Received event');
       expect(receivedEventLog).toBeDefined();
@@ -351,11 +354,10 @@ describe('Server', () => {
       expect(logContext.type).toBe('test.event');
       expect(logContext.source).toBe('test-suite');
 
-      // Verify truncation semantics
-      const ELLIPSIS = '…';
-      expect(typeof logContext.payload).toBe('string');
-      expect(logContext.payload.endsWith(ELLIPSIS)).toBe(true);
-      expect(logContext.payload.length).toBe(LOG_PAYLOAD_PREVIEW_LENGTH + ELLIPSIS.length);
+      // Verify that payload content is not logged and size is present
+      expect(logContext.payload).toBeUndefined();
+      expect(logContext.payload_size).toBeGreaterThan(300);
+      expect(logContext.payload_size_kind).toBe('json');
     });
 
     it('should trim whitespace from type and source before forwarding', async () => {
@@ -685,6 +687,8 @@ describe('Server', () => {
     it('should drop and log error for events with non-JSON-encodable payloads (e.g. functions)', async () => {
       // Ensure mock state is clean for this test
       fetchMock.mockClear();
+      (logger.info as jest.Mock).mockClear();
+      (logger.error as jest.Mock).mockClear();
 
       // We can't send a function over HTTP JSON, so we have to bypass supertest/express body parsing
       // and call processEvent directly to test this edge case in the logic layer.
@@ -696,6 +700,12 @@ describe('Server', () => {
 
       // @ts-ignore - explicitly testing invalid payload type
       await processEvent(payloadWithFunction);
+
+      // Verify "Received event" log
+      const receivedEventLog = (logger.info as jest.Mock).mock.calls.find(args => args[1] === 'Received event');
+      expect(receivedEventLog).toBeDefined();
+      expect(receivedEventLog![0].payload_size).toBeNull();
+      expect(receivedEventLog![0].payload_size_kind).toBe('unavailable');
 
       expect(logger.error).toHaveBeenCalledWith(
         expect.objectContaining({
