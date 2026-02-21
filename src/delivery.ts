@@ -13,7 +13,14 @@ import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
 import { logger } from './logger';
-import { HTTP_REQUEST_TIMEOUT_MS } from './constants';
+import {
+  HTTP_REQUEST_TIMEOUT_MS,
+  INITIAL_RETRY_DELAY_MS,
+  RETRY_JITTER_MAX_MS,
+  RETRY_BACKOFF_BASE_MS,
+  RETRY_BACKOFF_MAX_MS,
+  LOCK_RETRIES,
+} from './constants';
 // NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
 import pLimit from 'p-limit';
 
@@ -117,7 +124,7 @@ export async function initDelivery(): Promise<void> {
 
       let release;
       try {
-        release = await lock(lockFile, { retries: 3 });
+        release = await lock(lockFile, { retries: LOCK_RETRIES });
         for (const file of processingFiles) {
           const filePath = path.join(dataDir, file);
           try {
@@ -154,7 +161,7 @@ export async function initDelivery(): Promise<void> {
       // We use copyFile to ensure a consistent point-in-time snapshot.
       let releaseScan;
       try {
-        releaseScan = await lock(lockFile, { retries: 3 });
+        releaseScan = await lock(lockFile, { retries: LOCK_RETRIES });
         const candidatePath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
         await fs.copyFile(failedLog, candidatePath);
         snapshotPath = candidatePath;
@@ -288,7 +295,7 @@ export async function saveFailedEvent(
     lastAttempt: new Date().toISOString(),
     // Initial: 30s + 0-10s jitter (consistent with other retry logic)
     nextAttempt: new Date(
-      Date.now() + 30000 + Math.random() * 10000,
+      Date.now() + INITIAL_RETRY_DELAY_MS + Math.random() * RETRY_JITTER_MAX_MS,
     ).toISOString(),
     error,
   };
@@ -327,7 +334,7 @@ export async function retryFailedEvents(): Promise<void> {
 
   try {
     // 1. Lock the lockfile
-    release = await lock(lockFile, { retries: 3 });
+    release = await lock(lockFile, { retries: LOCK_RETRIES });
 
     // Check size/existence before rename to avoid empty file churn
     const stats = await fs.stat(failedLog).catch(() => null);
@@ -392,11 +399,11 @@ export async function retryFailedEvents(): Promise<void> {
               entry.retryCount++;
               // Jitter backoff
               const backoff = Math.min(
-                Math.pow(2, entry.retryCount) * 60 * 1000,
-                24 * 60 * 60 * 1000,
+                Math.pow(2, entry.retryCount) * RETRY_BACKOFF_BASE_MS,
+                RETRY_BACKOFF_MAX_MS,
               );
               // 0-10s jitter
-              const jitter = Math.random() * 10000;
+              const jitter = Math.random() * RETRY_JITTER_MAX_MS;
               entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
               entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
 
@@ -438,11 +445,11 @@ export async function retryFailedEvents(): Promise<void> {
               entry.retryCount++;
               entry.lastAttempt = new Date().toISOString();
               const backoff = Math.min(
-                Math.pow(2, entry.retryCount) * 60 * 1000,
-                24 * 60 * 60 * 1000,
+                Math.pow(2, entry.retryCount) * RETRY_BACKOFF_BASE_MS,
+                RETRY_BACKOFF_MAX_MS,
               );
               // 0-10s jitter
-              const jitter = Math.random() * 10000;
+              const jitter = Math.random() * RETRY_JITTER_MAX_MS;
               entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
               entry.error = err instanceof Error ? err.message : String(err);
               lastError = entry.error;
@@ -530,7 +537,7 @@ async function batchAppendEvents(entries: FailedEvent[]) {
 
   let release;
   try {
-    release = await lock(getLockFilePath(), { retries: 3 });
+    release = await lock(getLockFilePath(), { retries: LOCK_RETRIES });
     await pipeline(
       Readable.from(iterator()),
       createWriteStream(getFailedLogPath(), { flags: 'a', encoding: 'utf8' }),
