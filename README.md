@@ -60,7 +60,7 @@ npm is not supported.
 |----------|---------|--------------|
 | `FORWARD_CONCURRENCY` | `10` | Anzahl maximal gleichzeitiger Forward-Requests für eingehende Events (Fanout). |
 | `RETRY_CONCURRENCY` | `5` | Anzahl gleichzeitiger Forward-Versuche beim Retry. Erhöht den Durchsatz, belastet aber Zielsysteme stärker. |
-| `RETRY_BATCH_SIZE` | `50` | Größe des Sliding-Window/Buffers für Retry-Tasks (Backpressure). |
+| `RETRY_BATCH_SIZE` | `50` | Größe des Sliding-Window/Buffers für Retry-Tasks (Backpressure). Der Buffer ist unabhängig von `RETRY_CONCURRENCY`. |
 
 ### Service-URLs & Authentifizierung
 
