@@ -14,9 +14,7 @@ import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
 import { logger } from './logger';
 import { HTTP_REQUEST_TIMEOUT_MS } from './constants';
-// NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
-import * as pLimitMod from 'p-limit';
-const pLimit = (pLimitMod as any).default || pLimitMod;
+import { pLimit } from './utils/pLimit';
 
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
@@ -359,7 +357,7 @@ export async function retryFailedEvents(): Promise<void> {
     }
 
     // Use parallelization to increase retry throughput
-    const limit = (pLimit as any)(config.retryConcurrency);
+    const limit = pLimit(config.retryConcurrency);
     // Use a Set to track active wrapper promises (void) for sliding window backpressure & cleanup
     const activePromises = new Set<Promise<void>>();
     // Ensure windowSize is at least 1 to prevent deadlock; legacy name: used as sliding-window buffer size
