@@ -20,11 +20,12 @@ import {
 } from './delivery';
 
 const MAX_STRING_LENGTH = 256;
-export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
 
 const pendingFetches = new Set<Promise<void>>();
 // Guard against invalid environment values (ensure at least 1)
 const forwardLimit = pLimit(Math.max(1, config.forwardConcurrency));
+
+type PayloadSizeKind = 'json' | 'unavailable';
 
 type TryJsonResult =
   | { kind: 'ok'; json: string }
@@ -239,26 +240,16 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   const effectivePayload = payload === undefined ? null : payload;
   const jsonResult = tryJson(effectivePayload);
 
-  let payloadPreview = String(effectivePayload);
+  const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : null;
+  const payloadSizeKind: PayloadSizeKind = jsonResult.kind === 'ok' ? 'json' : 'unavailable';
 
-  if (typeof effectivePayload === 'object' && effectivePayload !== null) {
-    if (jsonResult.kind === 'ok') {
-      payloadPreview = jsonResult.json;
-    } else if (jsonResult.kind === 'undefined') {
-      payloadPreview = '[Not JSON-encodable payload]';
-    } else {
-      payloadPreview = '[Circular or invalid payload]';
-    }
-  }
-
-  if (payloadPreview.length > LOG_PAYLOAD_PREVIEW_LENGTH) {
-    payloadPreview = `${payloadPreview.slice(0, LOG_PAYLOAD_PREVIEW_LENGTH)}…`;
-  }
-
+  // Security: Payload content is never logged to prevent sensitive data leaks.
+  // We only log the size and kind for observability.
   logger.info({
     type,
     source,
-    payload: payloadPreview,
+    payload_size: payloadSize,
+    payload_size_kind: payloadSizeKind,
   }, 'Received event');
 
   // Soft-guard for notification-only events
