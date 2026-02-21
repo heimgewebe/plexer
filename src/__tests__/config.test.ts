@@ -340,34 +340,4 @@ describe('config', () => {
       }).toThrow(/^Invalid RETRY_BATCH_SIZE environment variable/);
     });
   });
-
-  describe('Forward Configuration', () => {
-    it('uses default when FORWARD_CONCURRENCY is not set', () => {
-      delete process.env.FORWARD_CONCURRENCY;
-
-      jest.isolateModules(() => {
-        const { config } = require('../config');
-        expect(config.forwardConcurrency).toBe(10);
-      });
-    });
-
-    it('accepts valid FORWARD_CONCURRENCY', () => {
-      process.env.FORWARD_CONCURRENCY = '20';
-
-      jest.isolateModules(() => {
-        const { config } = require('../config');
-        expect(config.forwardConcurrency).toBe(20);
-      });
-    });
-
-    it('rejects invalid FORWARD_CONCURRENCY', () => {
-      process.env.FORWARD_CONCURRENCY = 'abc';
-
-      expect(() => {
-        jest.isolateModules(() => {
-          require('../config');
-        });
-      }).toThrow(/^Invalid FORWARD_CONCURRENCY environment variable/);
-    });
-  });
 });

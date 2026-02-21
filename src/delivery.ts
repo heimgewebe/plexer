@@ -21,8 +21,8 @@ import {
   RETRY_BACKOFF_MAX_MS,
   LOCK_RETRIES,
 } from './constants';
-
-import { pLimit } from './utils/pLimit';
+// NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
+import pLimit from 'p-limit';
 
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
@@ -364,8 +364,8 @@ export async function retryFailedEvents(): Promise<void> {
         throw new Error('[Reliability] Processing file not defined despite lock acquisition');
     }
 
-    // Use parallelization to increase retry throughput; clamp to prevent deadlocks
-    const limit = pLimit(Math.max(1, config.retryConcurrency));
+    // Use parallelization to increase retry throughput
+    const limit = pLimit(config.retryConcurrency);
     // Use a Set to track active wrapper promises (void) for sliding window backpressure & cleanup
     const activePromises = new Set<Promise<void>>();
     // Ensure windowSize is at least 1 to prevent deadlock; legacy name: used as sliding-window buffer size
@@ -397,7 +397,7 @@ export async function retryFailedEvents(): Promise<void> {
             if (!consumer || !consumer.url) {
               // Backoff
               entry.retryCount++;
-              // Jitter backoff
+              // Exponential backoff: first retry uses 2x base delay (intentional: 2^1 * base)
               const backoff = Math.min(
                 Math.pow(2, entry.retryCount) * RETRY_BACKOFF_BASE_MS,
                 RETRY_BACKOFF_MAX_MS,
@@ -444,6 +444,7 @@ export async function retryFailedEvents(): Promise<void> {
             } catch (err) {
               entry.retryCount++;
               entry.lastAttempt = new Date().toISOString();
+              // Exponential backoff: first retry uses 2x base delay (intentional: 2^1 * base)
               const backoff = Math.min(
                 Math.pow(2, entry.retryCount) * RETRY_BACKOFF_BASE_MS,
                 RETRY_BACKOFF_MAX_MS,
