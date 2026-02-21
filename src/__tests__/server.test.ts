@@ -685,6 +685,7 @@ describe('Server', () => {
       // Ensure mock state is clean for this test
       fetchMock.mockClear();
       (logger.info as jest.Mock).mockClear();
+      (logger.error as jest.Mock).mockClear();
 
       // We can't send a function over HTTP JSON, so we have to bypass supertest/express body parsing
       // and call processEvent directly to test this edge case in the logic layer.

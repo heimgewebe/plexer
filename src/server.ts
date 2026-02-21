@@ -22,6 +22,8 @@ const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
 
+type PayloadSizeKind = 'json' | 'unavailable';
+
 type TryJsonResult =
   | { kind: 'ok'; json: string }
   | { kind: 'undefined' }
@@ -236,7 +238,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   const jsonResult = tryJson(effectivePayload);
 
   const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : null;
-  const payloadSizeKind = jsonResult.kind === 'ok' ? 'json' : 'unavailable';
+  const payloadSizeKind: PayloadSizeKind = jsonResult.kind === 'ok' ? 'json' : 'unavailable';
 
   logger.info({
     type,
