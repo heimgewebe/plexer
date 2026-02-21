@@ -59,7 +59,7 @@ npm is not supported.
 | Variable | Default | Beschreibung |
 |----------|---------|--------------|
 | `RETRY_CONCURRENCY` | `5` | Anzahl gleichzeitiger Forward-Versuche beim Retry. Erhöht den Durchsatz, belastet aber Zielsysteme stärker. |
-| `RETRY_BATCH_SIZE` | `50` | Anzahl Events, die pro Chunk aus der Datei gelesen werden (Backpressure Control). |
+| `RETRY_BATCH_SIZE` | `50` | Maximale Anzahl gleichzeitig verarbeiteter Events im Sliding Window (Backpressure Control). |
 
 ### Service-URLs & Authentifizierung
 
