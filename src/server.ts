@@ -19,7 +19,6 @@ import {
 } from './delivery';
 
 const MAX_STRING_LENGTH = 256;
-export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
 
 const pendingFetches = new Set<Promise<void>>();
 
@@ -236,26 +235,12 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   const effectivePayload = payload === undefined ? null : payload;
   const jsonResult = tryJson(effectivePayload);
 
-  let payloadPreview = String(effectivePayload);
-
-  if (typeof effectivePayload === 'object' && effectivePayload !== null) {
-    if (jsonResult.kind === 'ok') {
-      payloadPreview = jsonResult.json;
-    } else if (jsonResult.kind === 'undefined') {
-      payloadPreview = '[Not JSON-encodable payload]';
-    } else {
-      payloadPreview = '[Circular or invalid payload]';
-    }
-  }
-
-  if (payloadPreview.length > LOG_PAYLOAD_PREVIEW_LENGTH) {
-    payloadPreview = `${payloadPreview.slice(0, LOG_PAYLOAD_PREVIEW_LENGTH)}…`;
-  }
+  const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : 0;
 
   logger.info({
     type,
     source,
-    payload: payloadPreview,
+    payload_size: payloadSize,
   }, 'Received event');
 
   // Soft-guard for notification-only events
