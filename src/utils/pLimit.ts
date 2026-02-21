@@ -5,7 +5,7 @@ import * as mod from 'p-limit';
  * pLimit(concurrency) returns a limit function.
  * limit(fn) returns a Promise that resolves when fn finishes.
  */
-type PLimit = (concurrency: number) => <T>(fn: () => Promise<T>) => Promise<T>;
+type PLimit = (concurrency: number) => <T>(fn: () => T | PromiseLike<T>) => Promise<T>;
 
 /**
  * Robust p-limit wrapper that handles CJS and ESM interop.
