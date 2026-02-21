@@ -58,8 +58,9 @@ npm is not supported.
 
 | Variable | Default | Beschreibung |
 |----------|---------|--------------|
+| `FORWARD_CONCURRENCY` | `10` | Anzahl maximal gleichzeitiger Forward-Requests für eingehende Events (Fanout). |
 | `RETRY_CONCURRENCY` | `5` | Anzahl gleichzeitiger Forward-Versuche beim Retry. Erhöht den Durchsatz, belastet aber Zielsysteme stärker. |
-| `RETRY_BATCH_SIZE` | `50` | Anzahl Events, die pro Chunk aus der Datei gelesen werden (Backpressure Control). |
+| `RETRY_BATCH_SIZE` | `50` | Größe des Sliding-Window/Buffers für Retry-Tasks (Backpressure). Unabhängig von `RETRY_CONCURRENCY` (Empfehlung: `RETRY_BATCH_SIZE >= RETRY_CONCURRENCY`, damit der Buffer die Concurrency nicht künstlich deckelt; Performance-Tuning-Parameter). |
 
 ### Service-URLs & Authentifizierung
 

@@ -28,6 +28,9 @@ jest.mock('../config', () => ({
     hauskiToken: 'hauski-secret-token',
     chronikToken: 'chronik-secret-token',
     dataDir: 'data',
+    forwardConcurrency: 10,
+    retryConcurrency: 5,
+    retryBatchSize: 50,
   },
 }));
 

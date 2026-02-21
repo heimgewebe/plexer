@@ -10,6 +10,9 @@ jest.mock('../config', () => ({
     environment: 'test',
     heimgeistUrl: 'http://heimgeist.local',
     dataDir: 'data',
+    forwardConcurrency: 10,
+    retryConcurrency: 5,
+    retryBatchSize: 50,
   },
 }));
 
