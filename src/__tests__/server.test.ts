@@ -65,6 +65,11 @@ describe('Server', () => {
     // Clear mocks before each test
     jest.clearAllMocks();
 
+    // Explicitly clear logger mocks to prevent cross-test interference
+    (logger.info as jest.Mock).mockClear();
+    (logger.warn as jest.Mock).mockClear();
+    (logger.error as jest.Mock).mockClear();
+
     // Mock global fetch
     fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -327,7 +332,6 @@ describe('Server', () => {
     });
 
     it('should log payload size instead of preview in Received event', async () => {
-      (logger.info as jest.Mock).mockClear();
       const payload = {
         type: 'test.event',
         source: 'test-suite',
@@ -358,7 +362,6 @@ describe('Server', () => {
     });
 
     it('should log payload_size as null and kind as unavailable for non-JSON payloads', async () => {
-      (logger.info as jest.Mock).mockClear();
       // Bypassing body parsing to test the internal processEvent logic with a function
       const payloadWithFunction = {
         type: 'test.unsafe',

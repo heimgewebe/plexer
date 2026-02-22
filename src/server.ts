@@ -23,13 +23,18 @@ import {
 const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
-// Hardcoded forward backpressure (fanout concurrency)
+/**
+ * Hardcoded fanout concurrency: limits burst load; tuned for small home deployments.
+ * If future tuning is needed, reintroduce env var with validation + docs.
+ */
 const forwardLimit = pLimit(10);
 
 type TryJsonResult =
   | { kind: 'ok'; json: string }
   | { kind: 'undefined' }
   | { kind: 'error'; error: unknown };
+
+type PayloadSizeKind = 'json' | 'unavailable';
 
 function tryJson(value: unknown): TryJsonResult {
   try {
@@ -230,8 +235,6 @@ export function createServer(): Express {
 
   return app;
 }
-
-type PayloadSizeKind = 'json' | 'unavailable';
 
 export async function processEvent(event: PlexerEvent): Promise<void> {
   const { type, source, payload } = event;
