@@ -105,8 +105,8 @@ Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports 
 ## Security & Logging
 
 Plexer ist auf **Privacy-by-Design** ausgelegt:
-- Eingehende Event-Payloads werden **nicht** im Klartext geloggt (nur Metadaten und Größe).
-- Fehlgeschlagene kritische Events werden verschlüsselt oder in geschützten Verzeichnissen gepuffert (je nach Environment).
+- Eingehende Event-Payloads werden **nicht** im Klartext geloggt; geloggt werden Metadaten und `payload_size` (wenn berechenbar).
+- Fehlgeschlagene kritische Events werden lokal gepuffert (Queue-Datei im `dataDir`). Der Betrieb muss sicherstellen, dass dieses Verzeichnis geschützt ist (z. B. Dateirechte oder verschlüsseltes Volume).
 
 ## Observability
 

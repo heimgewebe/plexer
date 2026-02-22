@@ -352,7 +352,28 @@ describe('Server', () => {
 
       // Verify payload_size is present and payload preview is absent
       expect(logContext.payload_size).toBeGreaterThan(300);
+      expect(logContext.payload_size_kind).toBe('json');
       expect(logContext.payload).toBeUndefined();
+    });
+
+    it('should log payload_size as null and kind as unavailable for non-JSON payloads', async () => {
+      // Bypassing body parsing to test the internal processEvent logic with a function
+      const payloadWithFunction = {
+        type: 'test.unsafe',
+        source: 'test',
+        payload: () => {}, // JSON.stringify returns undefined
+      };
+
+      // @ts-ignore
+      await processEvent(payloadWithFunction);
+
+      const calls = (logger.info as jest.Mock).mock.calls;
+      const receivedEventLog = calls.find(args => args[1] === 'Received event');
+      expect(receivedEventLog).toBeDefined();
+
+      const logContext = receivedEventLog![0];
+      expect(logContext.payload_size).toBeNull();
+      expect(logContext.payload_size_kind).toBe('unavailable');
     });
 
     it('should trim whitespace from type and source before forwarding', async () => {
