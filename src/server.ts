@@ -11,6 +11,8 @@ import {
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
 import { logger } from './logger';
+// NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
+import pLimit from 'p-limit';
 import {
   saveFailedEvent,
   getDeliveryMetrics,
@@ -19,9 +21,10 @@ import {
 } from './delivery';
 
 const MAX_STRING_LENGTH = 256;
-export const LOG_PAYLOAD_PREVIEW_LENGTH = 100;
 
 const pendingFetches = new Set<Promise<void>>();
+// Hardcoded forward backpressure (fanout concurrency)
+const forwardLimit = pLimit(10);
 
 type TryJsonResult =
   | { kind: 'ok'; json: string }
@@ -236,26 +239,12 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   const effectivePayload = payload === undefined ? null : payload;
   const jsonResult = tryJson(effectivePayload);
 
-  let payloadPreview = String(effectivePayload);
-
-  if (typeof effectivePayload === 'object' && effectivePayload !== null) {
-    if (jsonResult.kind === 'ok') {
-      payloadPreview = jsonResult.json;
-    } else if (jsonResult.kind === 'undefined') {
-      payloadPreview = '[Not JSON-encodable payload]';
-    } else {
-      payloadPreview = '[Circular or invalid payload]';
-    }
-  }
-
-  if (payloadPreview.length > LOG_PAYLOAD_PREVIEW_LENGTH) {
-    payloadPreview = `${payloadPreview.slice(0, LOG_PAYLOAD_PREVIEW_LENGTH)}…`;
-  }
+  const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : 0;
 
   logger.info({
     type,
     source,
-    payload: payloadPreview,
+    payload_size: payloadSize,
   }, 'Received event');
 
   // Soft-guard for notification-only events
@@ -311,12 +300,12 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
         Object.assign(headers, getAuthHeaders(authKind, token, key));
       }
 
-      const fetchPromise = fetch(url, {
+      const fetchPromise = forwardLimit(() => fetch(url, {
         method: 'POST',
         headers,
         body: serializedEvent,
         signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
-      })
+      }))
         .then((response) => {
           const logData: Record<string, unknown> = {
             event_id: eventId,

@@ -102,6 +102,12 @@ Die Unterscheidung erfolgt primär anhand des Konsumenten und sekundär per Even
 Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports liegen in `src/vendor/schemas/`.
 **Wichtig:** Diese Dateien sind Kopien (Vendoring) der kanonischen Definitionen aus dem **Metarepo** (`heimgewebe/metarepo/contracts/plexer/`). Änderungen dürfen nicht hier, sondern nur im Metarepo erfolgen und müssen dann synchronisiert werden.
 
+## Security & Logging
+
+Plexer ist auf **Privacy-by-Design** ausgelegt:
+- Eingehende Event-Payloads werden **nicht** im Klartext geloggt (nur Metadaten und Größe).
+- Fehlgeschlagene kritische Events werden verschlüsselt oder in geschützten Verzeichnissen gepuffert (je nach Environment).
+
 ## Observability
 
 - `GET /status`: Liefert Metriken zur Delivery-Queue.

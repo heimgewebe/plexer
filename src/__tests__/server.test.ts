@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { createServer, processEvent, LOG_PAYLOAD_PREVIEW_LENGTH } from '../server';
+import { createServer, processEvent } from '../server';
 import { config } from '../config';
 
 // Mock logger
@@ -326,12 +326,11 @@ describe('Server', () => {
       expect(requestBody).not.toHaveProperty('ts');
     });
 
-    it('should truncate long payloads in logs', async () => {
-      const longString = 'a'.repeat(300);
+    it('should log payload size instead of preview in Received event', async () => {
       const payload = {
         type: 'test.event',
         source: 'test-suite',
-        payload: { data: longString },
+        payload: { data: 'a'.repeat(300) },
       };
 
       const response = await request(app).post('/events').send(payload);
@@ -339,7 +338,7 @@ describe('Server', () => {
       // Only Heimgeist should receive 'test.event'
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      // Verify that logger.info was called with the truncated payload
+      // Verify that logger.info was called with the payload size
       const calls = (logger.info as jest.Mock).mock.calls;
       const receivedEventLog = calls.find(args => args[1] === 'Received event');
       expect(receivedEventLog).toBeDefined();
@@ -351,11 +350,9 @@ describe('Server', () => {
       expect(logContext.type).toBe('test.event');
       expect(logContext.source).toBe('test-suite');
 
-      // Verify truncation semantics
-      const ELLIPSIS = '…';
-      expect(typeof logContext.payload).toBe('string');
-      expect(logContext.payload.endsWith(ELLIPSIS)).toBe(true);
-      expect(logContext.payload.length).toBe(LOG_PAYLOAD_PREVIEW_LENGTH + ELLIPSIS.length);
+      // Verify payload_size is present and payload preview is absent
+      expect(logContext.payload_size).toBeGreaterThan(300);
+      expect(logContext.payload).toBeUndefined();
     });
 
     it('should trim whitespace from type and source before forwarding', async () => {
