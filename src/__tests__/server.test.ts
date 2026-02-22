@@ -327,6 +327,7 @@ describe('Server', () => {
     });
 
     it('should log payload size instead of preview in Received event', async () => {
+      (logger.info as jest.Mock).mockClear();
       const payload = {
         type: 'test.event',
         source: 'test-suite',
@@ -357,6 +358,7 @@ describe('Server', () => {
     });
 
     it('should log payload_size as null and kind as unavailable for non-JSON payloads', async () => {
+      (logger.info as jest.Mock).mockClear();
       // Bypassing body parsing to test the internal processEvent logic with a function
       const payloadWithFunction = {
         type: 'test.unsafe',

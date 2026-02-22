@@ -231,6 +231,8 @@ export function createServer(): Express {
   return app;
 }
 
+type PayloadSizeKind = 'json' | 'unavailable';
+
 export async function processEvent(event: PlexerEvent): Promise<void> {
   const { type, source, payload } = event;
 
@@ -240,7 +242,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   const jsonResult = tryJson(effectivePayload);
 
   const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : null;
-  const payloadSizeKind = jsonResult.kind === 'ok' ? 'json' : 'unavailable';
+  const payloadSizeKind: PayloadSizeKind = jsonResult.kind === 'ok' ? 'json' : 'unavailable';
 
   logger.info({
     type,
