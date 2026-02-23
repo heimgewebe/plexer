@@ -313,7 +313,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
         body: serializedEvent,
         signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
       }))
-        .then((response) => {
+        .then(async (response) => {
           const logData: Record<string, unknown> = {
             event_id: eventId,
             publisher: source,
@@ -355,7 +355,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
               context.log_kind = 'best_effort_forward_failed';
               logger.warn(context, `[Best-Effort] ${errorMessage}`);
             } else {
-              saveFailedEvent(
+              await saveFailedEvent(
                 {
                   type,
                   source,
@@ -368,7 +368,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
             }
           }
         })
-        .catch((error) => {
+        .catch(async (error) => {
           const errorMessage = `Error forwarding event to ${label}:`;
           const context: Record<string, unknown> = {
             label,
@@ -384,7 +384,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
             context.log_kind = 'best_effort_forward_failed';
             logger.warn(context, `[Best-Effort] ${errorMessage}`);
           } else {
-            saveFailedEvent(
+            await saveFailedEvent(
               {
                 type,
                 source,

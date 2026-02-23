@@ -62,6 +62,8 @@ describe('Server', () => {
   let fetchMock: jest.Mock;
 
   beforeEach(() => {
+    jest.clearAllMocks();
+
     // isolate log assertions between tests
     (logger.info as jest.Mock).mockClear();
     (logger.warn as jest.Mock).mockClear();
