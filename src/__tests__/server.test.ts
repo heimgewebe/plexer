@@ -62,10 +62,7 @@ describe('Server', () => {
   let fetchMock: jest.Mock;
 
   beforeEach(() => {
-    // Clear mocks before each test
-    jest.clearAllMocks();
-
-    // Explicitly clear logger mocks to prevent cross-test interference
+    // isolate log assertions between tests
     (logger.info as jest.Mock).mockClear();
     (logger.warn as jest.Mock).mockClear();
     (logger.error as jest.Mock).mockClear();
