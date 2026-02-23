@@ -1,12 +1,14 @@
 import { createServer, drainPendingRequests, processEvent, getPendingRequestCount } from './server';
 import { config } from './config';
-import { EVENT_PLEXER_DELIVERY_REPORT_V1 } from './constants';
+import {
+  EVENT_PLEXER_DELIVERY_REPORT_V1,
+  DEFAULT_RETRY_INTERVAL_MS,
+  MIN_RETRY_DELAY_MS,
+  REPORT_INTERVAL_MS,
+} from './constants';
 import { retryFailedEvents, getNextDueAt, initDelivery, getDeliveryMetrics } from './delivery';
 
 const app = createServer();
-const RETRY_INTERVAL_MS = 60 * 1000;
-const MIN_RETRY_DELAY_MS = 5000;
-const REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Initialize delivery system (recovery + metrics)
 initDelivery().catch((err) => {
@@ -29,7 +31,7 @@ setInterval(() => {
 
 function scheduleRetry() {
   const nextDue = getNextDueAt();
-  let delay = RETRY_INTERVAL_MS;
+  let delay = DEFAULT_RETRY_INTERVAL_MS;
 
   if (nextDue) {
     const now = Date.now();
@@ -37,7 +39,7 @@ function scheduleRetry() {
     const diff = dueTime - now;
 
     // Clamp delay between 5s and 60s
-    delay = Math.min(RETRY_INTERVAL_MS, Math.max(MIN_RETRY_DELAY_MS, diff));
+    delay = Math.min(DEFAULT_RETRY_INTERVAL_MS, Math.max(MIN_RETRY_DELAY_MS, diff));
   }
 
   // Add jitter (+/- 1s)

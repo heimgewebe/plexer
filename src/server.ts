@@ -10,8 +10,9 @@ import {
 } from './constants';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
-import { pLimit } from './utils/pLimit';
 import { logger } from './logger';
+// NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
+import pLimit from 'p-limit';
 import {
   saveFailedEvent,
   getDeliveryMetrics,
@@ -22,15 +23,18 @@ import {
 const MAX_STRING_LENGTH = 256;
 
 const pendingFetches = new Set<Promise<void>>();
-// Guard against invalid environment values (ensure at least 1)
-const forwardLimit = pLimit(Math.max(1, config.forwardConcurrency));
-
-type PayloadSizeKind = 'json' | 'unavailable';
+/**
+ * Hardcoded fanout concurrency: limits burst load; tuned for small home deployments.
+ * If future tuning is needed, reintroduce env var with validation + docs.
+ */
+const forwardLimit = pLimit(10);
 
 type TryJsonResult =
   | { kind: 'ok'; json: string }
   | { kind: 'undefined' }
   | { kind: 'error'; error: unknown };
+
+type PayloadSizeKind = 'json' | 'unavailable';
 
 function tryJson(value: unknown): TryJsonResult {
   try {
@@ -243,8 +247,6 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   const payloadSize = jsonResult.kind === 'ok' ? getPayloadSizeBytes(jsonResult.json) : null;
   const payloadSizeKind: PayloadSizeKind = jsonResult.kind === 'ok' ? 'json' : 'unavailable';
 
-  // Security: Payload content is never logged to prevent sensitive data leaks.
-  // We only log the size and kind for observability.
   logger.info({
     type,
     source,
@@ -297,56 +299,85 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
       return;
     }
 
-    const task = forwardLimit(async () => {
-      try {
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-        };
-        if (token) {
-          Object.assign(headers, getAuthHeaders(authKind, token, key));
-        }
+    try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        Object.assign(headers, getAuthHeaders(authKind, token, key));
+      }
 
-        const response = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: serializedEvent,
-          signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
-        });
-
-        const logData: Record<string, unknown> = {
-          event_id: eventId,
-          publisher: source,
-          delivered_to: label,
-          statusCode: response.status,
-          auth: !!token,
-        };
-
-        if (
-          typeof payload === 'object' &&
-          payload !== null &&
-          'repo' in payload
-        ) {
-          logData.repo = (payload as Record<string, unknown>).repo;
-        }
-
-        if (response.ok) {
-          logger.info(logData, 'Event forwarded');
-        } else {
-          let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
-          if (response.status === 401 || response.status === 403) {
-            errorMessage += ' (token rejected)';
-          }
-
-          const context: Record<string, unknown> = {
-            status: response.status,
-            label,
-            type,
+      const fetchPromise = forwardLimit(() => fetch(url, {
+        method: 'POST',
+        headers,
+        body: serializedEvent,
+        signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
+      }))
+        .then(async (response) => {
+          const logData: Record<string, unknown> = {
+            event_id: eventId,
+            publisher: source,
+            delivered_to: label,
+            statusCode: response.status,
+            auth: !!token,
           };
 
-          // Reliability Policy:
-          // - Heimgeist: Critical push -> Queue on failure
-          // - Others (Chronik, Leitstand, hausKI): Best-effort notification -> Log warn on failure
-          // - BEST_EFFORT_EVENTS override: Always warn, never queue
+          if (
+            typeof payload === 'object' &&
+            payload !== null &&
+            'repo' in payload
+          ) {
+            logData.repo = (payload as Record<string, unknown>).repo;
+          }
+
+          if (response.ok) {
+            logger.info(logData, 'Event forwarded');
+          } else {
+            let errorMessage = `Failed to forward event to ${label}: ${response.status} ${response.statusText}`;
+            if (response.status === 401 || response.status === 403) {
+              errorMessage += ' (token rejected)';
+            }
+
+            const context: Record<string, unknown> = {
+              status: response.status,
+              label,
+              type,
+            };
+
+            // Reliability Policy:
+            // - Heimgeist: Critical push -> Queue on failure
+            // - Others (Chronik, Leitstand, hausKI): Best-effort notification -> Log warn on failure
+            // - BEST_EFFORT_EVENTS override: Always warn, never queue
+            const isCriticalConsumer = key === 'heimgeist';
+            const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
+
+            if (isBestEffortEvent || !isCriticalConsumer) {
+              context.log_kind = 'best_effort_forward_failed';
+              logger.warn(context, `[Best-Effort] ${errorMessage}`);
+            } else {
+              await saveFailedEvent(
+                {
+                  type,
+                  source,
+                  payload,
+                },
+                key,
+                errorMessage,
+              ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
+              logger.error(context, errorMessage);
+            }
+          }
+        })
+        .catch(async (error) => {
+          const errorDetail = error instanceof Error ? error.message : String(error);
+          const errorMessage = `Error forwarding event to ${label}: ${errorDetail}`;
+          const context: Record<string, unknown> = {
+            label,
+            type,
+            error: errorDetail,
+          };
+
+          // Reliability Policy (same as above)
           const isCriticalConsumer = key === 'heimgeist';
           const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
 
@@ -354,7 +385,6 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
             context.log_kind = 'best_effort_forward_failed';
             logger.warn(context, `[Best-Effort] ${errorMessage}`);
           } else {
-            // Intentional durability policy: await persistence before slot release
             await saveFailedEvent(
               {
                 type,
@@ -366,42 +396,13 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
             ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
             logger.error(context, errorMessage);
           }
-        }
-      } catch (error) {
-        const errorDetail = error instanceof Error ? error.message : String(error);
-        const errorMessage = `Error forwarding event to ${label}: ${errorDetail}`;
-        const context: Record<string, unknown> = {
-          label,
-          type,
-          error: errorDetail,
-        };
-
-        // Reliability Policy (same as above)
-        const isCriticalConsumer = key === 'heimgeist';
-        const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
-
-        if (isBestEffortEvent || !isCriticalConsumer) {
-          context.log_kind = 'best_effort_forward_failed';
-          logger.warn(context, `[Best-Effort] ${errorMessage}`);
-        } else {
-          // Intentional durability policy: await persistence before slot release
-          await saveFailedEvent(
-            {
-              type,
-              source,
-              payload,
-            },
-            key,
-            errorDetail,
-          ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
-          logger.error(context, errorMessage);
-        }
-      }
-    });
-
-    pendingFetches.add(task);
-    void task.finally(() => {
-      pendingFetches.delete(task);
-    });
+        })
+        .finally(() => {
+          pendingFetches.delete(fetchPromise);
+        });
+      pendingFetches.add(fetchPromise);
+    } catch (error) {
+      logger.error({ err: error }, `Failed to initiate forward to ${label}`);
+    }
   });
 }

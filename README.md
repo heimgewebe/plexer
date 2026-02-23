@@ -58,9 +58,8 @@ npm is not supported.
 
 | Variable | Default | Beschreibung |
 |----------|---------|--------------|
-| `FORWARD_CONCURRENCY` | `10` | Anzahl maximal gleichzeitiger Forward-Requests für eingehende Events (Fanout). |
 | `RETRY_CONCURRENCY` | `5` | Anzahl gleichzeitiger Forward-Versuche beim Retry. Erhöht den Durchsatz, belastet aber Zielsysteme stärker. |
-| `RETRY_BATCH_SIZE` | `50` | Größe des Sliding-Window/Buffers für Retry-Tasks (Backpressure). Unabhängig von `RETRY_CONCURRENCY` (Empfehlung: `RETRY_BATCH_SIZE >= RETRY_CONCURRENCY`, damit der Buffer die Concurrency nicht künstlich deckelt; Performance-Tuning-Parameter). |
+| `RETRY_BATCH_SIZE` | `50` | Maximale Anzahl gleichzeitig aktiver Retry-Tasks im Sliding Window (Backpressure Control). Empfehlung: `RETRY_BATCH_SIZE >= RETRY_CONCURRENCY`. |
 
 ### Service-URLs & Authentifizierung
 
@@ -103,12 +102,14 @@ Die Unterscheidung erfolgt primär anhand des Konsumenten und sekundär per Even
 Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports liegen in `src/vendor/schemas/`.
 **Wichtig:** Diese Dateien sind Kopien (Vendoring) der kanonischen Definitionen aus dem **Metarepo** (`heimgewebe/metarepo/contracts/plexer/`). Änderungen dürfen nicht hier, sondern nur im Metarepo erfolgen und müssen dann synchronisiert werden.
 
+## Security & Logging
+
+Plexer ist **Functionality-first** ausgelegt: Zustellung und Robustheit stehen im Vordergrund. Um Datenabfluss zu vermeiden, gelten dabei folgende Schutzmaßnahmen:
+- Eingehende Event-Payloads werden nicht geloggt; geloggt werden nur Metadaten sowie `payload_size` und `payload_size_kind` (wenn berechenbar/sonst unavailable).
+- Fehlgeschlagene kritische Events werden lokal gepuffert (Queue-Datei im `dataDir`). Der Betrieb muss sicherstellen, dass dieses Verzeichnis geschützt ist (z. B. Dateirechte oder verschlüsseltes Volume).
+
 ## Observability
 
 - `GET /status`: Liefert Metriken zur Delivery-Queue.
   - Payload folgt dem Contract: `plexer.delivery.report.v1`.
   - Felder: `pending` (in-flight), `failed` (in queue), `retryable_now` (fällig), `next_due_at` (nächster Retry).
-
-## Security & Logging
-
-- **Event Logging**: Eingehende Events werden protokolliert. Aus Sicherheitsgründen (Privacy/Data Leak Prevention) werden dabei **keine Payload-Inhalte** geloggt, sondern nur die Metadaten `payload_size` und `payload_size_kind`.
