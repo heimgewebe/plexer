@@ -369,11 +369,12 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
           }
         })
         .catch(async (error) => {
-          const errorMessage = `Error forwarding event to ${label}:`;
+          const errorDetail = error instanceof Error ? error.message : String(error);
+          const errorMessage = `Error forwarding event to ${label}: ${errorDetail}`;
           const context: Record<string, unknown> = {
             label,
             type,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorDetail,
           };
 
           // Reliability Policy (same as above)
@@ -391,7 +392,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
                 payload,
               },
               key,
-              error instanceof Error ? error.message : String(error),
+              errorMessage,
             ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
             logger.error(context, errorMessage);
           }
