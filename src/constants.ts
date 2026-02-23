@@ -32,7 +32,7 @@ export const RETRY_BACKOFF_MAX_MS = 86400000; // 24 hours
 
 export const LOCK_RETRIES = 3;
 
-// For index.ts
+// Scheduler timing (retry loop + reporting)
 export const DEFAULT_RETRY_INTERVAL_MS = 60000;
 export const MIN_RETRY_DELAY_MS = 5000;
 export const REPORT_INTERVAL_MS = 300000; // 5 minutes
