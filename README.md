@@ -104,8 +104,8 @@ Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports 
 
 ## Security & Logging
 
-Plexer ist auf **Privacy-by-Design** ausgelegt:
-- Eingehende Event-Payloads werden **nicht** im Klartext geloggt; geloggt werden Metadaten sowie `payload_size` und `payload_size_kind` (wenn berechenbar/sonst unavailable).
+Plexer ist **Functionality-first** ausgelegt: Zustellung und Robustheit stehen im Vordergrund. Um Datenabfluss zu vermeiden, gelten dabei folgende Schutzmaßnahmen:
+- Eingehende Event-Payloads werden nicht im Klartext geloggt; geloggt werden Metadaten sowie `payload_size` und `payload_size_kind` (wenn berechenbar/sonst unavailable).
 - Fehlgeschlagene kritische Events werden lokal gepuffert (Queue-Datei im `dataDir`). Der Betrieb muss sicherstellen, dass dieses Verzeichnis geschützt ist (z. B. Dateirechte oder verschlüsseltes Volume).
 
 ## Observability
