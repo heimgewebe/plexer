@@ -50,8 +50,10 @@ jest.mock('../delivery', () => ({
       typeof body === 'object' &&
       typeof body.type === 'string' &&
       body.type.trim().length > 0 &&
+      body.type.length <= 256 &&
       typeof body.source === 'string' &&
       body.source.trim().length > 0 &&
+      body.source.length <= 256 &&
       body.payload !== undefined;
     return isValid;
   }),
