@@ -392,10 +392,6 @@ export async function retryFailedEvents(): Promise<void> {
             const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
             if (!consumer || !consumer.url) {
               const reason = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
-              logger.error(
-                { consumerKey: entry.consumerKey, eventType: entry.event.type },
-                `[Retry] ${reason} for consumer "${entry.consumerKey}" — this indicates a configuration error`,
-              );
               // Backoff
               entry.retryCount++;
               // Exponential backoff: first retry uses 2x base delay (intentional: 2^1 * base)
@@ -410,6 +406,17 @@ export async function retryFailedEvents(): Promise<void> {
 
               // Metrics fallback
               entry.lastAttempt = new Date().toISOString();
+
+              logger.error(
+                {
+                  consumerKey: entry.consumerKey,
+                  eventType: entry.event.type,
+                  reason,
+                  retryCount: entry.retryCount,
+                  nextAttempt: entry.nextAttempt,
+                },
+                '[Retry] Consumer configuration error; event requeued',
+              );
 
               return entry;
             }

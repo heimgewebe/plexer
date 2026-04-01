@@ -43,7 +43,8 @@ jest.mock('../delivery', () => ({
   }),
   retryFailedEvents: jest.fn().mockResolvedValue(undefined),
   validateDeliveryReport: jest.fn().mockReturnValue(true),
-  // Basic mock validation to prevent crashes in tests that send invalid data
+  // Keep this mock aligned with the schema constraints used by validateEventEnvelope
+  // (e.g. maxLength: 256 for type and source). Update here if the schema changes.
   validateEventEnvelope: jest.fn().mockImplementation((body) => {
     const isValid =
       body &&

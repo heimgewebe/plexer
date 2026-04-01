@@ -70,20 +70,20 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const server = app.listen(config.port, config.host, () => {
-  logger.info(`Server is running on http://${config.host}:${config.port}`);
-  logger.info(`Environment: ${config.environment}`);
+  logger.info({ host: config.host, port: config.port }, 'Server started');
+  logger.info({ environment: config.environment }, 'Environment loaded');
 });
 
 const shutdown = () => {
-  logger.info('Shutting down server...');
+  logger.info('Shutting down server');
   isShuttingDown = true;
   if (retryTimer) {
     clearTimeout(retryTimer);
   }
   server.close(async () => {
-    logger.info('Server closed. Draining pending requests...');
+    logger.info({ pending_requests: getPendingRequestCount() }, 'Server closed; draining pending requests');
     await drainPendingRequests();
-    logger.info('Pending requests drained. Exiting.');
+    logger.info('Pending requests drained; exiting');
     process.exit(0);
   });
 };
