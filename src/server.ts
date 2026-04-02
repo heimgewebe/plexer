@@ -20,8 +20,6 @@ import {
   validateEventEnvelope,
 } from './delivery';
 
-const MAX_STRING_LENGTH = 256;
-
 const pendingFetches = new Set<Promise<void>>();
 /**
  * Hardcoded fanout concurrency: limits burst load; tuned for small home deployments.
@@ -168,16 +166,6 @@ export function createServer(): Express {
           status: 'error',
           message: 'Invalid event envelope',
           errors: validateEventEnvelope.errors,
-        });
-      }
-
-      if (
-        normalizedType.length > MAX_STRING_LENGTH ||
-        normalizedSource.length > MAX_STRING_LENGTH
-      ) {
-        return res.status(400).json({
-          status: 'error',
-          message: `Event must include non-empty type & source (max ${MAX_STRING_LENGTH} chars) and payload`,
         });
       }
 

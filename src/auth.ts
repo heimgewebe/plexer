@@ -1,3 +1,4 @@
+import { logger } from './logger';
 
 /**
  * Returns strictly authentication headers (X-Auth or Authorization).
@@ -18,7 +19,8 @@ export function getAuthHeaders(
   } else {
     // Default to Bearer (includes 'bearer' and unknown)
     if (authKind !== 'bearer') {
-      console.warn(
+      logger.warn(
+        { authKind, consumerKey },
         `Unknown authKind "${authKind}" for consumer ${consumerKey}; defaulting to Bearer`
       );
     }

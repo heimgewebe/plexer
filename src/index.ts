@@ -7,12 +7,13 @@ import {
   REPORT_INTERVAL_MS,
 } from './constants';
 import { retryFailedEvents, getNextDueAt, initDelivery, getDeliveryMetrics } from './delivery';
+import { logger } from './logger';
 
 const app = createServer();
 
 // Initialize delivery system (recovery + metrics)
 initDelivery().catch((err) => {
-  console.error('Failed to initialize delivery system:', err);
+  logger.error({ err }, 'Failed to initialize delivery system');
 });
 
 // Periodic Delivery Report Event
@@ -24,7 +25,7 @@ setInterval(() => {
       source: 'plexer',
       payload: report
     }).catch((err) => {
-      console.error('Failed to send delivery report event:', err);
+      logger.error({ err }, 'Failed to send delivery report event');
     });
   }
 }, REPORT_INTERVAL_MS);
@@ -51,7 +52,7 @@ function scheduleRetry() {
   retryTimer = setTimeout(() => {
     retryFailedEvents()
       .catch((err) => {
-        console.error('Failed to retry events:', err);
+        logger.error({ err }, 'Failed to retry events');
       })
       .finally(() => {
         if (!isShuttingDown) {
@@ -69,20 +70,20 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 const server = app.listen(config.port, config.host, () => {
-  console.log(`Server is running on http://${config.host}:${config.port}`);
-  console.log(`Environment: ${config.environment}`);
+  logger.info({ host: config.host, port: config.port }, 'Server started');
+  logger.info({ environment: config.environment }, 'Environment loaded');
 });
 
 const shutdown = () => {
-  console.log('Shutting down server...');
+  logger.info('Shutting down server');
   isShuttingDown = true;
   if (retryTimer) {
     clearTimeout(retryTimer);
   }
   server.close(async () => {
-    console.log('Server closed. Draining pending requests...');
+    logger.info({ pending_requests: getPendingRequestCount() }, 'Server closed; draining pending requests');
     await drainPendingRequests();
-    console.log('Pending requests drained. Exiting.');
+    logger.info('Pending requests drained; exiting');
     process.exit(0);
   });
 };

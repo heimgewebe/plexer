@@ -360,10 +360,6 @@ export async function retryFailedEvents(): Promise<void> {
     const remainingEvents: FailedEvent[] = [];
     const now = Date.now();
 
-    if (!processingFile) {
-        throw new Error('[Reliability] Processing file not defined despite lock acquisition');
-    }
-
     // Use parallelization to increase retry throughput
     const limit = pLimit(Math.max(1, config.retryConcurrency));
     // Use a Set to track active wrapper promises (void) for sliding window backpressure & cleanup
@@ -395,6 +391,7 @@ export async function retryFailedEvents(): Promise<void> {
             // Try to send
             const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
             if (!consumer || !consumer.url) {
+              const reason = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
               // Backoff
               entry.retryCount++;
               // Exponential backoff: first retry uses 2x base delay (intentional: 2^1 * base)
@@ -405,10 +402,21 @@ export async function retryFailedEvents(): Promise<void> {
               // 0-10s jitter
               const jitter = Math.random() * RETRY_JITTER_MAX_MS;
               entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
-              entry.error = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';
+              entry.error = reason;
 
               // Metrics fallback
               entry.lastAttempt = new Date().toISOString();
+
+              logger.error(
+                {
+                  consumerKey: entry.consumerKey,
+                  eventType: entry.event.type,
+                  reason,
+                  retryCount: entry.retryCount,
+                  nextAttempt: entry.nextAttempt,
+                },
+                '[Retry] Consumer configuration error; event requeued',
+              );
 
               return entry;
             }
