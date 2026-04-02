@@ -32,33 +32,23 @@ jest.mock('../config', () => ({
 }));
 
 // Mock delivery to avoid side effects
-jest.mock('../delivery', () => ({
-  saveFailedEvent: jest.fn().mockResolvedValue(undefined),
-  getDeliveryMetrics: jest.fn().mockReturnValue({
-    counts: { pending: 0, failed: 0 },
-    last_error: null,
-    last_retry_at: null,
-    retryable_now: 0,
-    next_due_at: null,
-  }),
-  retryFailedEvents: jest.fn().mockResolvedValue(undefined),
-  validateDeliveryReport: jest.fn().mockReturnValue(true),
-  // Keep this mock aligned with the schema constraints used by validateEventEnvelope
-  // (e.g. maxLength: 256 for type and source). Update here if the schema changes.
-  validateEventEnvelope: jest.fn().mockImplementation((body) => {
-    const isValid =
-      body &&
-      typeof body === 'object' &&
-      typeof body.type === 'string' &&
-      body.type.trim().length > 0 &&
-      body.type.length <= 256 &&
-      typeof body.source === 'string' &&
-      body.source.trim().length > 0 &&
-      body.source.length <= 256 &&
-      body.payload !== undefined;
-    return isValid;
-  }),
-}));
+jest.mock('../delivery', () => {
+  const actual = jest.requireActual('../delivery');
+  return {
+    saveFailedEvent: jest.fn().mockResolvedValue(undefined),
+    getDeliveryMetrics: jest.fn().mockReturnValue({
+      counts: { pending: 0, failed: 0 },
+      last_error: null,
+      last_retry_at: null,
+      retryable_now: 0,
+      next_due_at: null,
+    }),
+    retryFailedEvents: jest.fn().mockResolvedValue(undefined),
+    validateDeliveryReport: jest.fn().mockReturnValue(true),
+    // Use the real validator so this test always reflects the actual schema — no manual drift.
+    validateEventEnvelope: actual.validateEventEnvelope,
+  };
+});
 
 describe('Server', () => {
   const app = createServer();
