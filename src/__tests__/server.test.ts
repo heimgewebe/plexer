@@ -490,6 +490,20 @@ describe('Server', () => {
       expect(response.status).toBe(400);
     });
 
+    it('should reject type with characters forbidden by schema pattern (e.g. slash)', async () => {
+      // The real validator enforces ^[A-Za-z0-9._-]+$ on the normalised type.
+      // The old partial mock only checked non-empty + maxLength and would have accepted this.
+      const payload = {
+        type: 'bad/type',
+        source: 'test-suite',
+        payload: {},
+      };
+
+      const response = await request(app).post('/events').send(payload);
+      expect(response.status).toBe(400);
+      expect(response.body.message).toContain('Invalid event envelope');
+    });
+
     it('should accept type with whitespace padding that exceeds max length but is valid after trim', async () => {
       const padding = ' '.repeat(10);
       const validString = 'a'.repeat(250);
