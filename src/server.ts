@@ -19,6 +19,7 @@ import {
   validateDeliveryReport,
   validateEventEnvelope,
 } from './delivery';
+import { deliverToChronikAgentLedger } from './chronik';
 
 const pendingFetches = new Set<Promise<void>>();
 /**
@@ -33,6 +34,84 @@ type TryJsonResult =
   | { kind: 'error'; error: unknown };
 
 type PayloadSizeKind = 'json' | 'unavailable';
+
+const ALLOWED_AGENT_RUN_EVENT_KEYS = new Set([
+  'schema_version',
+  'event_id',
+  'kind',
+  'ts',
+  'source',
+  'subject',
+  'trust_tier',
+  'status',
+  'caused_by',
+  'evidence_refs',
+  'data',
+  'corrects',
+]);
+
+const ALLOWED_AGENT_RUN_EVENT_KINDS = new Set([
+  'agent.run.started',
+  'agent.run.completed',
+  'agent.run.blocked',
+]);
+const MAX_V1_EVENT_BYTES = 8192;
+const ALLOWED_AGENT_RUN_DATA_KEYS = new Set([
+  'result',
+  'blocker_code',
+  'summary',
+  'duration_ms',
+]);
+
+type V1ValidationResult =
+  | { ok: true; eventJson: string; eventSize: number }
+  | { ok: false; statusCode: number; message: string };
+
+function validateV1AgentRunEvent(body: unknown): V1ValidationResult {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, statusCode: 400, message: 'Invalid event structure' };
+  }
+
+  const event = body as Record<string, unknown>;
+  const disallowedEventKeys = Object.keys(event)
+    .filter((key) => !ALLOWED_AGENT_RUN_EVENT_KEYS.has(key));
+  if (disallowedEventKeys.length > 0) {
+    return { ok: false, statusCode: 422, message: 'event contains unsupported keys' };
+  }
+
+  if (typeof event.kind !== 'string') {
+    return { ok: false, statusCode: 400, message: 'kind must be a string' };
+  }
+
+  if (!ALLOWED_AGENT_RUN_EVENT_KINDS.has(event.kind)) {
+    return { ok: false, statusCode: 422, message: 'Unsupported event kind' };
+  }
+
+  const data = event.data;
+  if (data !== undefined) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return { ok: false, statusCode: 400, message: 'data must be an object when present' };
+    }
+
+    const disallowedKeys = Object.keys(data as Record<string, unknown>)
+      .filter((key) => !ALLOWED_AGENT_RUN_DATA_KEYS.has(key));
+    if (disallowedKeys.length > 0) {
+      return { ok: false, statusCode: 422, message: 'data contains unsupported keys' };
+    }
+  }
+
+  const jsonResult = tryJson(body);
+  if (jsonResult.kind !== 'ok') {
+    return { ok: false, statusCode: 400, message: 'Event must be JSON-serializable' };
+  }
+
+  const eventSize = getPayloadSizeBytes(jsonResult.json);
+  if (eventSize > MAX_V1_EVENT_BYTES) {
+    return { ok: false, statusCode: 413, message: 'Event payload too large' };
+  }
+
+  return { ok: true, eventJson: jsonResult.json, eventSize };
+}
 
 function tryJson(value: unknown): TryJsonResult {
   try {
@@ -124,6 +203,57 @@ export function createServer(): Express {
 
     res.json(responseEnvelope);
   });
+
+
+  app.post(
+    '/v1/events',
+    async (
+      req: Request<unknown, unknown, unknown>,
+      res: Response,
+    ) => {
+      const validation = validateV1AgentRunEvent(req.body);
+      if (!validation.ok) {
+        return res.status(validation.statusCode).json({
+          status: 'error',
+          message: validation.message,
+        });
+      }
+
+      const delivery = await deliverToChronikAgentLedger(req.body);
+      logger.info({
+        kind: (req.body as Record<string, unknown>).kind,
+        delivery_status: delivery.status,
+        retryable: delivery.retryable,
+        event_size: validation.eventSize,
+      }, 'Processed v1 event');
+
+      if (delivery.status === 'delivered') {
+        return res.status(202).json({ status: 'accepted' });
+      }
+
+      if (delivery.status === 'skipped') {
+        return res.status(503).json({
+          status: 'error',
+          message: 'Chronik delivery is not configured',
+          retryable: false,
+        });
+      }
+
+      if (delivery.retryable) {
+        return res.status(503).json({
+          status: 'error',
+          message: 'Chronik delivery failed',
+          retryable: true,
+        });
+      }
+
+      return res.status(502).json({
+        status: 'error',
+        message: 'Chronik rejected event',
+        retryable: false,
+      });
+    },
+  );
 
   app.post(
     '/events',
