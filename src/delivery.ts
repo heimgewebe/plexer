@@ -419,7 +419,12 @@ export async function retryFailedEvents(): Promise<void> {
                 return null;
               }
 
-              if (!result.retryable) {
+              if (
+                !result.retryable &&
+                result.status !== 'skipped' &&
+                result.statusCode !== 401 &&
+                result.statusCode !== 403
+              ) {
                 logger.error(
                   { type: entry.event.type, status: result.status, error: result.error },
                   '[Retry] Dropping permanent Chronik agent.ledger failure',

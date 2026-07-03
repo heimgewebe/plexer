@@ -193,6 +193,18 @@ function validateV1AgentRunEvent(body: unknown): V1ValidationResult {
   return { ok: true, eventJson: jsonResult.json, eventSize };
 }
 
+
+function shouldQueueChronikAgentLedgerFailure(delivery: {
+  status: string;
+  retryable: boolean;
+  statusCode?: number;
+}): boolean {
+  return delivery.retryable ||
+    delivery.status === 'skipped' ||
+    delivery.statusCode === 401 ||
+    delivery.statusCode === 403;
+}
+
 function tryJson(value: unknown): TryJsonResult {
   try {
     const json = JSON.stringify(value);
@@ -242,7 +254,20 @@ export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
 export function createServer(): Express {
   const app = express();
 
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req, _res, buf) => {
+      const path = req.url?.split('?')[0];
+      if (path === '/v1/events' && buf.length > MAX_V1_EVENT_BYTES) {
+        const error = new Error('Event payload too large') as Error & {
+          status?: number;
+          statusCode?: number;
+        };
+        error.status = 413;
+        error.statusCode = 413;
+        throw error;
+      }
+    },
+  }));
 
   app.get('/', (req: Request, res: Response) => {
     res.json({
@@ -311,15 +336,7 @@ export function createServer(): Express {
         return res.status(202).json({ status: 'accepted' });
       }
 
-      if (delivery.status === 'skipped') {
-        return res.status(503).json({
-          status: 'error',
-          message: 'Chronik delivery is not configured',
-          retryable: false,
-        });
-      }
-
-      if (delivery.retryable) {
+      if (shouldQueueChronikAgentLedgerFailure(delivery)) {
         await saveFailedChronikAgentLedgerEvent(
           req.body,
           delivery.error ?? delivery.status,

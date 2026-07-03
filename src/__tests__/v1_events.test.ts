@@ -32,6 +32,16 @@ describe('POST /v1/events', () => {
     expect(saveMock).not.toHaveBeenCalled();
   });
 
+  it('rejects raw oversized request bodies', async () => {
+    const body = `{"kind":"agent.run.completed","data":{"summary":"ok"},"padding":"${' '.repeat(9000)}"}`;
+    const response = await request(app)
+      .post('/v1/events')
+      .set('Content-Type', 'application/json')
+      .send(body);
+    expect(response.status).toBe(413);
+    expect(deliverMock).not.toHaveBeenCalled();
+  });
+
   it('rejects unsupported kinds', async () => {
     const response = await request(app).post('/v1/events').send({ kind: 'repo.review.gate.v1' });
     expect(response.status).toBe(422);
@@ -63,6 +73,15 @@ describe('POST /v1/events', () => {
     expect(response.status).toBe(202);
     expect(response.body).toMatchObject({ status: 'queued', retryable: true });
     expect(saveMock).toHaveBeenCalledWith(event, 'retry');
+  });
+
+  it('queues temporary configuration failures', async () => {
+    deliverMock.mockResolvedValue({ status: 'skipped', retryable: false, error: 'missing config' });
+    const event = { kind: 'agent.run.started', data: { summary: 'started' } };
+    const response = await request(app).post('/v1/events').send(event);
+    expect(response.status).toBe(202);
+    expect(response.body).toMatchObject({ status: 'queued', retryable: true });
+    expect(saveMock).toHaveBeenCalledWith(event, 'missing config');
   });
 
   it('maps permanent delivery failures to 502', async () => {
