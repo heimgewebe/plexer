@@ -1,0 +1,25 @@
+{
+  "schema_version": "agent-run-event.v0",
+  "event_id": "evt-agent-run-proof-0001",
+  "kind": "agent.run.completed",
+  "ts": "2026-07-03T00:00:00Z",
+  "source": {
+    "repo": "heimgewebe/grabowski",
+    "component": "manual-proof",
+    "run_id": "proof-0001"
+  },
+  "subject": {
+    "repo": "heimgewebe/plexer",
+    "branch": "main"
+  },
+  "trust_tier": "declared",
+  "status": "active",
+  "evidence_refs": [
+    "plexer-pr-70"
+  ],
+  "data": {
+    "result": "completed",
+    "summary": "Fixture proof event for Plexer v1 agent-run ingress.",
+    "duration_ms": 1
+  }
+}

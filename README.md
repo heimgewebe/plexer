@@ -17,7 +17,7 @@ Plexer wird in Richtung **Event Gateway und Delivery Relay** neu zugeschnitten. 
 - Grabowski und Bureau dürfen nicht von Plexer-Verfügbarkeit abhängen.
 - Der erste v2-Scope bleibt bewusst klein: `agent.run.started`, `agent.run.completed`, `agent.run.blocked`.
 
-Details: [`docs/architecture/plexer-v2-gateway.md`](docs/architecture/plexer-v2-gateway.md) und [`docs/migration/plexer-v2-execution-plan.md`](docs/migration/plexer-v2-execution-plan.md).
+Details: [`docs/architecture/plexer-v2-gateway.md`](docs/architecture/plexer-v2-gateway.md), [`docs/migration/plexer-v2-execution-plan.md`](docs/migration/plexer-v2-execution-plan.md) und [`docs/proofs/agent-run-proof-of-use.md`](docs/proofs/agent-run-proof-of-use.md).
 
 ## Scope
 
