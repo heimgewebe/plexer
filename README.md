@@ -7,6 +7,18 @@ Plexer ist das Ereignisnetz (Event Router) für den Heimgewebe-Organismus.
 - Loggt eingehende Events
 - Leitet sie an Heimgeist und weitere konfigurierte Konsumenten (Chronik, Leitstand, hausKI) weiter
 
+## Plexer v2 Richtung
+
+Plexer wird in Richtung **Event Gateway und Delivery Relay** neu zugeschnitten. Der bestehende Router bleibt während der Migration kompatibel, aber die Zielrolle ändert sich:
+
+- Chronik ist die kritische append-only Senke für operative Ledger-Ereignisse.
+- Plexer validiert, klassifiziert, queued und liefert aus.
+- Heimgeist, Leitstand und hausKI sind Beobachter- oder Analyseflächen, nicht die primäre Wahrheit.
+- Grabowski und Bureau dürfen nicht von Plexer-Verfügbarkeit abhängen.
+- Der erste v2-Scope bleibt bewusst klein: `agent.run.started`, `agent.run.completed`, `agent.run.blocked`.
+
+Details: [`docs/architecture/plexer-v2-gateway.md`](docs/architecture/plexer-v2-gateway.md) und [`docs/migration/plexer-v2-execution-plan.md`](docs/migration/plexer-v2-execution-plan.md).
+
 ## Scope
 
 Plexer kümmert sich ausschließlich um **Eventtransport**.
