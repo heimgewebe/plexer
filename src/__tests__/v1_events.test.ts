@@ -49,10 +49,19 @@ describe('POST /v1/events', () => {
     expect(deliverMock).not.toHaveBeenCalled();
   });
 
+  it('rejects invalid summary value', async () => {
+    const response = await request(app)
+      .post('/v1/events')
+      .send({ kind: 'agent.run.completed', data: { summary: 123 } });
+
+    expect(response.status).toBe(422);
+    expect(deliverMock).not.toHaveBeenCalled();
+  });
+
   it('rejects oversized events', async () => {
     const response = await request(app)
       .post('/v1/events')
-      .send({ kind: 'agent.run.completed', data: { summary: 'x'.repeat(9000) } });
+      .send({ kind: 'agent.run.completed', evidence_refs: ['x'.repeat(9000)] });
 
     expect(response.status).toBe(413);
     expect(deliverMock).not.toHaveBeenCalled();

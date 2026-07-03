@@ -63,6 +63,14 @@ const ALLOWED_AGENT_RUN_DATA_KEYS = new Set([
   'duration_ms',
 ]);
 
+function isValidV1AgentRunDataValue(key: string, value: unknown): boolean {
+  if (key === 'duration_ms') {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  }
+  if (typeof value !== 'string') return false;
+  return value.length <= (key === 'summary' ? 1024 : 256);
+}
+
 type V1ValidationResult =
   | { ok: true; eventJson: string; eventSize: number }
   | { ok: false; statusCode: number; message: string };
@@ -93,10 +101,17 @@ function validateV1AgentRunEvent(body: unknown): V1ValidationResult {
       return { ok: false, statusCode: 400, message: 'data must be an object when present' };
     }
 
-    const disallowedKeys = Object.keys(data as Record<string, unknown>)
+    const dataRecord = data as Record<string, unknown>;
+    const disallowedKeys = Object.keys(dataRecord)
       .filter((key) => !ALLOWED_AGENT_RUN_DATA_KEYS.has(key));
     if (disallowedKeys.length > 0) {
       return { ok: false, statusCode: 422, message: 'data contains unsupported keys' };
+    }
+
+    for (const [key, value] of Object.entries(dataRecord)) {
+      if (!isValidV1AgentRunDataValue(key, value)) {
+        return { ok: false, statusCode: 422, message: 'data contains invalid values' };
+      }
     }
   }
 
