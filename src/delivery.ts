@@ -13,6 +13,7 @@ import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
 import { getAuthHeaders } from './auth';
 import { logger } from './logger';
+import { deliverToChronikAgentLedger } from './chronik';
 import {
   HTTP_REQUEST_TIMEOUT_MS,
   INITIAL_RETRY_DELAY_MS,
@@ -29,6 +30,8 @@ let lastRetryAt: string | null = null;
 let failedCount = 0;
 let retryableNowCount = 0;
 let nextDueAt: string | null = null;
+
+const CHRONIK_AGENT_LEDGER_CONSUMER_KEY = 'chronik-agent-ledger';
 
 const ajv = new Ajv({ strict: true });
 addFormats(ajv);
@@ -317,6 +320,22 @@ export async function saveFailedEvent(
   });
 }
 
+
+export async function saveFailedChronikAgentLedgerEvent(
+  event: unknown,
+  error: string,
+): Promise<void> {
+  return saveFailedEvent(
+    {
+      type: 'agent.run.ledger.v1',
+      source: 'plexer',
+      payload: event,
+    },
+    CHRONIK_AGENT_LEDGER_CONSUMER_KEY,
+    error,
+  );
+}
+
 export async function retryFailedEvents(): Promise<void> {
   // Ensure we flush any in-memory events before rotating the log file
   await flushFailedWrites();
@@ -389,6 +408,44 @@ export async function retryFailedEvents(): Promise<void> {
           try {
             const attemptNow = Date.now();
             // Try to send
+            if (entry.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY) {
+              const result = await deliverToChronikAgentLedger(entry.event.payload);
+
+              if (result.status === 'delivered') {
+                logger.info(
+                  { type: entry.event.type, label: 'Chronik agent.ledger' },
+                  '[Retry] Successfully forwarded event to Chronik agent.ledger',
+                );
+                return null;
+              }
+
+              if (!result.retryable) {
+                logger.error(
+                  { type: entry.event.type, status: result.status, error: result.error },
+                  '[Retry] Dropping permanent Chronik agent.ledger failure',
+                );
+                return null;
+              }
+
+              entry.retryCount++;
+              entry.lastAttempt = new Date().toISOString();
+              const backoff = Math.min(
+                Math.pow(2, entry.retryCount) * RETRY_BACKOFF_BASE_MS,
+                RETRY_BACKOFF_MAX_MS,
+              );
+              const jitter = Math.random() * RETRY_JITTER_MAX_MS;
+              entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
+              entry.error = result.error ?? result.status;
+              lastError = entry.error;
+
+              logger.warn(
+                { error: entry.error, retryCount: entry.retryCount },
+                '[Retry] Failed to forward to Chronik agent.ledger; event requeued',
+              );
+
+              return entry;
+            }
+
             const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);
             if (!consumer || !consumer.url) {
               const reason = !consumer ? 'Consumer configuration missing' : 'Consumer URL missing';

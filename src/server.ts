@@ -18,6 +18,7 @@ import {
   getDeliveryMetrics,
   validateDeliveryReport,
   validateEventEnvelope,
+  saveFailedChronikAgentLedgerEvent,
 } from './delivery';
 import { deliverToChronikAgentLedger } from './chronik';
 
@@ -62,6 +63,36 @@ const ALLOWED_AGENT_RUN_DATA_KEYS = new Set([
   'summary',
   'duration_ms',
 ]);
+const ALLOWED_AGENT_RUN_SOURCE_KEYS = new Set(['repo', 'component', 'run_id']);
+const ALLOWED_AGENT_RUN_SUBJECT_KEYS = new Set(['repo', 'branch', 'head']);
+const ALLOWED_TRUST_TIERS = new Set(['observed', 'declared', 'inferred']);
+const ALLOWED_EVENT_STATUSES = new Set(['active', 'superseded', 'corrected']);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isShortString(value: unknown, maxLength: number): boolean {
+  return typeof value === 'string' && value.length <= maxLength;
+}
+
+function isStringArray(value: unknown, maxItems: number, maxLength = 256): boolean {
+  return Array.isArray(value) &&
+    value.length <= maxItems &&
+    value.every((item) => isShortString(item, maxLength));
+}
+
+function isAllowedStringObject(
+  value: unknown,
+  allowedKeys: Set<string>,
+  requiredKeys: string[] = [],
+): boolean {
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !allowedKeys.has(key))) return false;
+  if (requiredKeys.some((key) => typeof value[key] !== 'string')) return false;
+  return keys.every((key) => isShortString(value[key], 256));
+}
 
 function isValidV1AgentRunDataValue(key: string, value: unknown): boolean {
   if (key === 'duration_ms') {
@@ -71,16 +102,45 @@ function isValidV1AgentRunDataValue(key: string, value: unknown): boolean {
   return value.length <= (key === 'summary' ? 1024 : 256);
 }
 
+function isValidV1AgentRunTopLevelValue(key: string, value: unknown): boolean {
+  switch (key) {
+    case 'schema_version':
+    case 'event_id':
+    case 'ts':
+      return isShortString(value, 128);
+    case 'kind':
+      return typeof value === 'string' && ALLOWED_AGENT_RUN_EVENT_KINDS.has(value);
+    case 'source':
+      return isAllowedStringObject(value, ALLOWED_AGENT_RUN_SOURCE_KEYS, ['repo', 'component', 'run_id']);
+    case 'subject':
+      return isAllowedStringObject(value, ALLOWED_AGENT_RUN_SUBJECT_KEYS, ['repo']);
+    case 'trust_tier':
+      return typeof value === 'string' && ALLOWED_TRUST_TIERS.has(value);
+    case 'status':
+      return typeof value === 'string' && ALLOWED_EVENT_STATUSES.has(value);
+    case 'caused_by':
+      return isStringArray(value, 3);
+    case 'evidence_refs':
+      return isStringArray(value, 5, 512);
+    case 'corrects':
+      return isStringArray(value, 3);
+    case 'data':
+      return isPlainObject(value);
+    default:
+      return false;
+  }
+}
+
 type V1ValidationResult =
   | { ok: true; eventJson: string; eventSize: number }
   | { ok: false; statusCode: number; message: string };
 
 function validateV1AgentRunEvent(body: unknown): V1ValidationResult {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+  if (!isPlainObject(body)) {
     return { ok: false, statusCode: 400, message: 'Invalid event structure' };
   }
 
-  const event = body as Record<string, unknown>;
+  const event = body;
   const disallowedEventKeys = Object.keys(event)
     .filter((key) => !ALLOWED_AGENT_RUN_EVENT_KEYS.has(key));
   if (disallowedEventKeys.length > 0) {
@@ -95,20 +155,25 @@ function validateV1AgentRunEvent(body: unknown): V1ValidationResult {
     return { ok: false, statusCode: 422, message: 'Unsupported event kind' };
   }
 
+  for (const [key, value] of Object.entries(event)) {
+    if (!isValidV1AgentRunTopLevelValue(key, value)) {
+      return { ok: false, statusCode: 422, message: 'event contains invalid values' };
+    }
+  }
+
   const data = event.data;
   if (data !== undefined) {
-    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    if (!isPlainObject(data)) {
       return { ok: false, statusCode: 400, message: 'data must be an object when present' };
     }
 
-    const dataRecord = data as Record<string, unknown>;
-    const disallowedKeys = Object.keys(dataRecord)
+    const disallowedKeys = Object.keys(data)
       .filter((key) => !ALLOWED_AGENT_RUN_DATA_KEYS.has(key));
     if (disallowedKeys.length > 0) {
       return { ok: false, statusCode: 422, message: 'data contains unsupported keys' };
     }
 
-    for (const [key, value] of Object.entries(dataRecord)) {
+    for (const [key, value] of Object.entries(data)) {
       if (!isValidV1AgentRunDataValue(key, value)) {
         return { ok: false, statusCode: 422, message: 'data contains invalid values' };
       }
@@ -255,9 +320,12 @@ export function createServer(): Express {
       }
 
       if (delivery.retryable) {
-        return res.status(503).json({
-          status: 'error',
-          message: 'Chronik delivery failed',
+        await saveFailedChronikAgentLedgerEvent(
+          req.body,
+          delivery.error ?? delivery.status,
+        );
+        return res.status(202).json({
+          status: 'queued',
           retryable: true,
         });
       }
