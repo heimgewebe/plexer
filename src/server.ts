@@ -256,7 +256,8 @@ export function createServer(): Express {
 
   app.use(express.json({
     verify: (req, _res, buf) => {
-      const path = req.url?.split('?')[0];
+      const rawPath = req.url?.split('?')[0] ?? '';
+      const path = rawPath.replace(/\/+$/, '');
       if (path === '/v1/events' && buf.length > MAX_V1_EVENT_BYTES) {
         const error = new Error('Event payload too large') as Error & {
           status?: number;

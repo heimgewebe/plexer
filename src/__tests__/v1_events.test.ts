@@ -42,6 +42,16 @@ describe('POST /v1/events', () => {
     expect(deliverMock).not.toHaveBeenCalled();
   });
 
+  it('rejects raw oversized trailing slash request bodies', async () => {
+    const body = `{"kind":"agent.run.completed","data":{"summary":"ok"},"padding":"${' '.repeat(9000)}"}`;
+    const response = await request(app)
+      .post('/v1/events/')
+      .set('Content-Type', 'application/json')
+      .send(body);
+    expect(response.status).toBe(413);
+    expect(deliverMock).not.toHaveBeenCalled();
+  });
+
   it('rejects unsupported kinds', async () => {
     const response = await request(app).post('/v1/events').send({ kind: 'repo.review.gate.v1' });
     expect(response.status).toBe(422);
