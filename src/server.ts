@@ -18,7 +18,9 @@ import {
   getDeliveryMetrics,
   validateDeliveryReport,
   validateEventEnvelope,
+  saveFailedChronikAgentLedgerEvent,
 } from './delivery';
+import { deliverToChronikAgentLedger } from './chronik';
 
 const pendingFetches = new Set<Promise<void>>();
 /**
@@ -33,6 +35,175 @@ type TryJsonResult =
   | { kind: 'error'; error: unknown };
 
 type PayloadSizeKind = 'json' | 'unavailable';
+
+const ALLOWED_AGENT_RUN_EVENT_KEYS = new Set([
+  'schema_version',
+  'event_id',
+  'kind',
+  'ts',
+  'source',
+  'subject',
+  'trust_tier',
+  'status',
+  'caused_by',
+  'evidence_refs',
+  'data',
+  'corrects',
+]);
+
+const ALLOWED_AGENT_RUN_EVENT_KINDS = new Set([
+  'agent.run.started',
+  'agent.run.completed',
+  'agent.run.blocked',
+]);
+const MAX_V1_EVENT_BYTES = 8192;
+const ALLOWED_AGENT_RUN_DATA_KEYS = new Set([
+  'result',
+  'blocker_code',
+  'summary',
+  'duration_ms',
+]);
+const ALLOWED_AGENT_RUN_SOURCE_KEYS = new Set(['repo', 'component', 'run_id']);
+const ALLOWED_AGENT_RUN_SUBJECT_KEYS = new Set(['repo', 'branch', 'head']);
+const ALLOWED_TRUST_TIERS = new Set(['observed', 'declared', 'inferred']);
+const ALLOWED_EVENT_STATUSES = new Set(['active', 'superseded', 'corrected']);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isShortString(value: unknown, maxLength: number): boolean {
+  return typeof value === 'string' && value.length <= maxLength;
+}
+
+function isStringArray(value: unknown, maxItems: number, maxLength = 256): boolean {
+  return Array.isArray(value) &&
+    value.length <= maxItems &&
+    value.every((item) => isShortString(item, maxLength));
+}
+
+function isAllowedStringObject(
+  value: unknown,
+  allowedKeys: Set<string>,
+  requiredKeys: string[] = [],
+): boolean {
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.some((key) => !allowedKeys.has(key))) return false;
+  if (requiredKeys.some((key) => typeof value[key] !== 'string')) return false;
+  return keys.every((key) => isShortString(value[key], 256));
+}
+
+function isValidV1AgentRunDataValue(key: string, value: unknown): boolean {
+  if (key === 'duration_ms') {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  }
+  if (typeof value !== 'string') return false;
+  return value.length <= (key === 'summary' ? 1024 : 256);
+}
+
+function isValidV1AgentRunTopLevelValue(key: string, value: unknown): boolean {
+  switch (key) {
+    case 'schema_version':
+    case 'event_id':
+    case 'ts':
+      return isShortString(value, 128);
+    case 'kind':
+      return typeof value === 'string' && ALLOWED_AGENT_RUN_EVENT_KINDS.has(value);
+    case 'source':
+      return isAllowedStringObject(value, ALLOWED_AGENT_RUN_SOURCE_KEYS, ['repo', 'component', 'run_id']);
+    case 'subject':
+      return isAllowedStringObject(value, ALLOWED_AGENT_RUN_SUBJECT_KEYS, ['repo']);
+    case 'trust_tier':
+      return typeof value === 'string' && ALLOWED_TRUST_TIERS.has(value);
+    case 'status':
+      return typeof value === 'string' && ALLOWED_EVENT_STATUSES.has(value);
+    case 'caused_by':
+      return isStringArray(value, 3);
+    case 'evidence_refs':
+      return isStringArray(value, 5, 512);
+    case 'corrects':
+      return isStringArray(value, 3);
+    case 'data':
+      return isPlainObject(value);
+    default:
+      return false;
+  }
+}
+
+type V1ValidationResult =
+  | { ok: true; eventJson: string; eventSize: number }
+  | { ok: false; statusCode: number; message: string };
+
+function validateV1AgentRunEvent(body: unknown): V1ValidationResult {
+  if (!isPlainObject(body)) {
+    return { ok: false, statusCode: 400, message: 'Invalid event structure' };
+  }
+
+  const event = body;
+  const disallowedEventKeys = Object.keys(event)
+    .filter((key) => !ALLOWED_AGENT_RUN_EVENT_KEYS.has(key));
+  if (disallowedEventKeys.length > 0) {
+    return { ok: false, statusCode: 422, message: 'event contains unsupported keys' };
+  }
+
+  if (typeof event.kind !== 'string') {
+    return { ok: false, statusCode: 400, message: 'kind must be a string' };
+  }
+
+  if (!ALLOWED_AGENT_RUN_EVENT_KINDS.has(event.kind)) {
+    return { ok: false, statusCode: 422, message: 'Unsupported event kind' };
+  }
+
+  for (const [key, value] of Object.entries(event)) {
+    if (!isValidV1AgentRunTopLevelValue(key, value)) {
+      return { ok: false, statusCode: 422, message: 'event contains invalid values' };
+    }
+  }
+
+  const data = event.data;
+  if (data !== undefined) {
+    if (!isPlainObject(data)) {
+      return { ok: false, statusCode: 400, message: 'data must be an object when present' };
+    }
+
+    const disallowedKeys = Object.keys(data)
+      .filter((key) => !ALLOWED_AGENT_RUN_DATA_KEYS.has(key));
+    if (disallowedKeys.length > 0) {
+      return { ok: false, statusCode: 422, message: 'data contains unsupported keys' };
+    }
+
+    for (const [key, value] of Object.entries(data)) {
+      if (!isValidV1AgentRunDataValue(key, value)) {
+        return { ok: false, statusCode: 422, message: 'data contains invalid values' };
+      }
+    }
+  }
+
+  const jsonResult = tryJson(body);
+  if (jsonResult.kind !== 'ok') {
+    return { ok: false, statusCode: 400, message: 'Event must be JSON-serializable' };
+  }
+
+  const eventSize = getPayloadSizeBytes(jsonResult.json);
+  if (eventSize > MAX_V1_EVENT_BYTES) {
+    return { ok: false, statusCode: 413, message: 'Event payload too large' };
+  }
+
+  return { ok: true, eventJson: jsonResult.json, eventSize };
+}
+
+
+function shouldQueueChronikAgentLedgerFailure(delivery: {
+  status: string;
+  retryable: boolean;
+  statusCode?: number;
+}): boolean {
+  return delivery.retryable ||
+    delivery.status === 'skipped' ||
+    delivery.statusCode === 401 ||
+    delivery.statusCode === 403;
+}
 
 function tryJson(value: unknown): TryJsonResult {
   try {
@@ -83,7 +254,21 @@ export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
 export function createServer(): Express {
   const app = express();
 
-  app.use(express.json());
+  app.use(express.json({
+    verify: (req, _res, buf) => {
+      const rawPath = req.url?.split('?')[0] ?? '';
+      const path = rawPath.replace(/\/+$/, '');
+      if (path === '/v1/events' && buf.length > MAX_V1_EVENT_BYTES) {
+        const error = new Error('Event payload too large') as Error & {
+          status?: number;
+          statusCode?: number;
+        };
+        error.status = 413;
+        error.statusCode = 413;
+        throw error;
+      }
+    },
+  }));
 
   app.get('/', (req: Request, res: Response) => {
     res.json({
@@ -124,6 +309,52 @@ export function createServer(): Express {
 
     res.json(responseEnvelope);
   });
+
+
+  app.post(
+    '/v1/events',
+    async (
+      req: Request<unknown, unknown, unknown>,
+      res: Response,
+    ) => {
+      const validation = validateV1AgentRunEvent(req.body);
+      if (!validation.ok) {
+        return res.status(validation.statusCode).json({
+          status: 'error',
+          message: validation.message,
+        });
+      }
+
+      const delivery = await deliverToChronikAgentLedger(req.body);
+      logger.info({
+        kind: (req.body as Record<string, unknown>).kind,
+        delivery_status: delivery.status,
+        retryable: delivery.retryable,
+        event_size: validation.eventSize,
+      }, 'Processed v1 event');
+
+      if (delivery.status === 'delivered') {
+        return res.status(202).json({ status: 'accepted' });
+      }
+
+      if (shouldQueueChronikAgentLedgerFailure(delivery)) {
+        await saveFailedChronikAgentLedgerEvent(
+          req.body,
+          delivery.error ?? delivery.status,
+        );
+        return res.status(202).json({
+          status: 'queued',
+          retryable: true,
+        });
+      }
+
+      return res.status(502).json({
+        status: 'error',
+        message: 'Chronik rejected event',
+        retryable: false,
+      });
+    },
+  );
 
   app.post(
     '/events',
