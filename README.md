@@ -1,6 +1,10 @@
 # plexer
 
-Plexer ist das Ereignisnetz (Event Router) für den Heimgewebe-Organismus.
+## Operator ecosystem correction
+
+Plexer is the event gateway and delivery relay for bounded operational events in the new operator ecosystem. Target v2 doctrine: Chronik is the critical append-only sink for operational ledger events; Bureau owns tasks and claims; Grabowski owns local execution and receipts; Leitstand, Heimgeist and hausKI are observers or consumers. Legacy `/events` may still route unknown events to Heimgeist during migration; that is compatibility behavior, not the target architecture. Plexer is also not the only communication path.
+
+Plexer ist das Event Gateway und Delivery Relay für begrenzte operative Ereignisse im Heimgewebe-Operator-Ökosystem.
 
 - Nimmt Events über `POST /events` im Heimgewebe-Format entgegen
 - Prüft Minimalstruktur (`type`, `source`, `payload`; `type`/`source` max. 256 Zeichen)
@@ -29,7 +33,7 @@ Plexer tut:
 - Minimalstruktur prüfen
 - Events protokollieren
 - Events an Konsumenten weiterreichen (Fanout-Pattern)
-- Fehlgeschlagene Weiterleitungen an **Heimgeist** zwischenpuffern und wiederholen (Reliability)
+- Legacy `/events`: fehlgeschlagene Weiterleitungen an **Heimgeist** zwischenpuffern und wiederholen. V2 `/v1/events`: Chronik ist die kritische Senke.
 
 Plexer tut **nicht**:
 
@@ -44,7 +48,7 @@ Plexer tut **nicht**:
 Dieses Repository ist Teil des **Heimgewebe-Organismus**.
 
 Die übergeordnete Architektur, Achsen, Rollen und Contracts sind zentral beschrieben im  
-👉 [`metarepo/docs/heimgewebe-organismus.md`](https://github.com/heimgewebe/metarepo/blob/main/docs/heimgewebe-organismus.md)  
+👉 [`metarepo/docs/system/heimgewebe-organismus.md`](https://github.com/heimgewebe/metarepo/blob/main/docs/heimgewebe-organismus.md)  
 sowie im Zielbild  
 👉 [`metarepo/docs/heimgewebe-zielbild.md`](https://github.com/heimgewebe/metarepo/blob/main/docs/heimgewebe-zielbild.md).
 
@@ -92,16 +96,16 @@ Plexer wendet automatisch den korrekten Auth-Header je nach Zielsystem an.
 Plexer nutzt eine persistente, dateibasierte Queue (`failed_forwards.jsonl`), um Events auch bei temporären Ausfällen der Konsumenten zuzustellen. Die Verarbeitung erfolgt thread-safe über `proper-lockfile` (Locking auf `failed_forwards.lock`), sodass mehrere Prozesse oder Neustarts keine Datenkorruption verursachen.
 
 ### Critical Consumer vs. Best-Effort
-Aktuelle Policy: Nur Heimgeist ist kritisch; andere sind by-design Best-Effort (kann sich ändern).
+Aktuelle geteilte Policy: Legacy `/events` behält Heimgeist als kritischen Kompatibilitätskonsumenten. V2 `/v1/events` nutzt Chronik als kritische Senke für operative Ledger-Ereignisse.
 
 Die Unterscheidung erfolgt primär anhand des Konsumenten und sekundär per Event-Override:
 
-1. **Heimgeist (Critical Consumer)**:
+1. **Heimgeist (Legacy Critical Consumer für `/events`)**:
    - Zielsystem für persistente Datenhaltung.
    - Events, die an Heimgeist nicht zugestellt werden können, werden **gequeued** und via Exponential Backoff wiederholt.
    - Ausnahme: Events in `BEST_EFFORT_EVENTS` (z.B. `integrity.summary.published.v1`) werden auch für Heimgeist nicht gequeued.
 
-2. **Andere Konsumenten (Leitstand, hausKI, Chronik)**:
+2. **Andere Legacy-Konsumenten (Leitstand, hausKI, Chronik)**:
    - **Fire-and-Forget / Best-Effort**.
    - Fehlschläge werden geloggt (als Warning), aber **niemals gequeued**.
    - Dies verhindert, dass ein einzelner langsamer Konsument den Plexer blockiert oder die Queue füllt.
