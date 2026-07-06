@@ -4,7 +4,7 @@ ai_context_version: 1.1
 project:
   name: plexer
   summary: "Event gateway and delivery relay for Heimgewebe operational events."
-  role: event_gateway
+  role: event_gateway_delivery_relay
   primary_language: typescript
   visibility: internal
 
@@ -17,6 +17,23 @@ heimgewebe:
   wgx:
     profile_expected: true
     guard_smoke_expected: true
+
+role_contract:
+  name: event_gateway_delivery_relay
+  authority: delivery_routing
+  owns:
+    - event_envelopes
+    - delivery_attempts
+    - relay_reports
+  consumes:
+    - bounded_operational_events
+  produces:
+    - chronik_delivery_attempts
+    - observer_fanout_signals
+  limits:
+    - no_ledger_ownership
+    - no_worker_control
+  unavailable_effect: relay_degrades_without_changing_task_truth
 
 interfaces:
   consumes:
