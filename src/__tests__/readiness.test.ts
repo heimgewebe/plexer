@@ -75,14 +75,14 @@ import { createServer } from '../server';
 
 const CRITICAL_KEY = 'chronik-agent-ledger';
 
-const criticalEntry = (nextAttempt: string, retryCount = 1) =>
+const criticalEntry = (nextAttempt: string, retryCount = 1, error = 'chronik down') =>
   JSON.stringify({
     consumerKey: CRITICAL_KEY,
     event: { type: 'agent.run.ledger.v1', source: 'plexer', payload: { kind: 'agent.run.completed' } },
     retryCount,
     nextAttempt,
     lastAttempt: new Date().toISOString(),
-    error: 'chronik down',
+    error,
   });
 
 const observerEntry = (nextAttempt: string) =>
@@ -164,6 +164,22 @@ describe('Critical-sink readiness', () => {
     expect(readiness.queued).toBe(1);
     expect(readiness.retryable_now).toBe(1);
     expect(readiness.next_due_at).toBe(past);
+    // last_error must be reconstructed from the queued entry, not left null.
+    expect(readiness.last_error).toBe('chronik down');
+    // next_due_at is in the past, so the next retry is already due.
+    expect(readiness.due_now).toBe(true);
+  });
+
+  it('reconstructs last_error from an existing critical queue entry on init', async () => {
+    // Simulates a restart: the queue file already holds a failed critical entry.
+    mockReadLines([criticalEntry(new Date(Date.now() - 1000).toISOString())]);
+
+    await initDelivery();
+
+    const readiness = getCriticalSinkReadiness();
+    expect(readiness.status).toBe('degraded');
+    expect(readiness.queued).toBe(1);
+    expect(readiness.last_error).toBe('chronik down');
   });
 
   it('reports "ready" when the critical queue is empty', async () => {
@@ -225,6 +241,25 @@ describe('Critical-sink readiness', () => {
     expect(readiness.queued).toBe(0);
     expect(readiness.status).toBe('ready');
     expect(readiness.last_delivered_at).not.toBeNull();
+  });
+
+  it('keeps last_error from the remaining entry on partial recovery', async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const future = new Date(Date.now() + 60000).toISOString();
+    // One due entry (delivered) + one future entry (remains queued).
+    mockReadLines([
+      criticalEntry(past, 1, 'chronik down transient'),
+      criticalEntry(future, 2, 'chronik down persistent'),
+    ]);
+    deliverMock.mockResolvedValue({ status: 'delivered', retryable: false, statusCode: 202 });
+
+    await retryFailedEvents();
+
+    const readiness = getCriticalSinkReadiness();
+    expect(readiness.status).toBe('degraded');
+    expect(readiness.queued).toBe(1);
+    // last_error must reflect the still-queued entry, not the delivered one.
+    expect(readiness.last_error).toBe('chronik down persistent');
   });
 
   it('clears last_error on recovery (degraded -> queued -> delivered -> ready)', async () => {

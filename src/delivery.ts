@@ -42,6 +42,42 @@ let criticalNextDueAt: string | null = null;
 let lastCriticalError: string | null = null;
 let lastCriticalDeliveredAt: string | null = null;
 
+// Single source of truth for summarizing the critical (Chronik agent.ledger)
+// subset of the queue, so init-scan and post-retry recompute cannot drift —
+// especially on `lastError`, which must be reconstructed from the queue, not
+// tracked ad hoc. Fold entries one-by-one (works for both the streaming init
+// scan and the in-memory remaining-events array), then apply once.
+interface CriticalAccumulator {
+  queued: number;
+  retryableNow: number;
+  minNext: number;
+  lastError: string | null;
+}
+
+function newCriticalAccumulator(): CriticalAccumulator {
+  return { queued: 0, retryableNow: 0, minNext: Infinity, lastError: null };
+}
+
+function foldCriticalEntry(acc: CriticalAccumulator, entry: FailedEvent, nowMs: number): void {
+  if (entry.consumerKey !== CHRONIK_AGENT_LEDGER_CONSUMER_KEY) return;
+  acc.queued++;
+  if (typeof entry.error === 'string' && entry.error.length > 0) {
+    acc.lastError = entry.error;
+  }
+  const n = new Date(entry.nextAttempt).getTime();
+  if (isNaN(n)) return;
+  if (n <= nowMs) acc.retryableNow++;
+  if (n < acc.minNext) acc.minNext = n;
+}
+
+function applyCriticalAccumulator(acc: CriticalAccumulator): void {
+  criticalQueuedCount = acc.queued;
+  criticalRetryableNowCount = acc.retryableNow;
+  criticalNextDueAt = acc.minNext === Infinity ? null : new Date(acc.minNext).toISOString();
+  // Invariant: an empty critical queue has no outstanding failure to report.
+  lastCriticalError = acc.queued === 0 ? null : acc.lastError;
+}
+
 const ajv = new Ajv({ strict: true });
 addFormats(ajv);
 
@@ -166,9 +202,7 @@ export async function initDelivery(): Promise<void> {
     let minNext = Infinity;
     const now = Date.now();
     let rNow = 0;
-    let cLineCount = 0;
-    let cMinNext = Infinity;
-    let cRNow = 0;
+    const cAcc = newCriticalAccumulator();
     let snapshotPath: string | null = null;
 
     try {
@@ -194,16 +228,11 @@ export async function initDelivery(): Promise<void> {
                 try {
                 const e = JSON.parse(line) as FailedEvent;
                 const n = new Date(e.nextAttempt).getTime();
-                const isCritical = e.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY;
-                if (isCritical) cLineCount++;
                 if (!isNaN(n)) {
                     if (n < minNext) minNext = n;
                     if (n <= now) rNow++;
-                    if (isCritical) {
-                      if (n < cMinNext) cMinNext = n;
-                      if (n <= now) cRNow++;
-                    }
                 }
+                foldCriticalEntry(cAcc, e, now);
                 } catch {}
             }
         } catch (e) {
@@ -219,10 +248,7 @@ export async function initDelivery(): Promise<void> {
     failedCount = lineCount;
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
-    criticalQueuedCount = cLineCount;
-    criticalRetryableNowCount = cRNow;
-    criticalNextDueAt = cMinNext === Infinity ? null : new Date(cMinNext).toISOString();
-    if (cLineCount === 0) lastCriticalError = null;
+    applyCriticalAccumulator(cAcc);
   } catch (err) {
     logger.error({ err }, 'Error during startup initialization');
   }
@@ -396,10 +422,7 @@ export async function retryFailedEvents(): Promise<void> {
       failedCount = 0;
       retryableNowCount = 0;
       nextDueAt = null;
-      criticalQueuedCount = 0;
-      criticalRetryableNowCount = 0;
-      criticalNextDueAt = null;
-      lastCriticalError = null;
+      applyCriticalAccumulator(newCriticalAccumulator());
       return;
     }
 
@@ -452,9 +475,8 @@ export async function retryFailedEvents(): Promise<void> {
 
               if (result.status === 'delivered') {
                 lastCriticalDeliveredAt = new Date().toISOString();
-                // Recovery: a successful critical delivery clears the stale error
-                // so `last_error` reflects the current health, not history.
-                lastCriticalError = null;
+                // last_error is NOT cleared here: other critical events may remain
+                // queued. The final recompute below derives it from remainingEvents.
                 logger.info(
                   { type: entry.event.type, label: 'Chronik agent.ledger' },
                   '[Retry] Successfully forwarded event to Chronik agent.ledger',
@@ -485,7 +507,7 @@ export async function retryFailedEvents(): Promise<void> {
               entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
               entry.error = result.error ?? result.status;
               lastError = entry.error;
-              lastCriticalError = entry.error;
+              // lastCriticalError is derived from remainingEvents in the final recompute.
 
               logger.warn(
                 { error: entry.error, retryCount: entry.retryCount },
@@ -618,33 +640,22 @@ export async function retryFailedEvents(): Promise<void> {
     // Reset global metrics based on remaining events
     let minNext = Infinity;
     let rNow = 0;
-    let cCount = 0;
-    let cMinNext = Infinity;
-    let cRNow = 0;
+    const cAcc = newCriticalAccumulator();
     const nowAfter = Date.now();
 
     for (const e of remainingEvents) {
        const n = new Date(e.nextAttempt).getTime();
-       const isCritical = e.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY;
-       if (isCritical) cCount++;
        if (!isNaN(n)) {
           if (n < minNext) minNext = n;
           if (n <= nowAfter) rNow++;
-          if (isCritical) {
-            if (n < cMinNext) cMinNext = n;
-            if (n <= nowAfter) cRNow++;
-          }
        }
+       foldCriticalEntry(cAcc, e, nowAfter);
     }
 
     failedCount = remainingEvents.length;
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
-    criticalQueuedCount = cCount;
-    criticalRetryableNowCount = cRNow;
-    criticalNextDueAt = cMinNext === Infinity ? null : new Date(cMinNext).toISOString();
-    // Invariant: an empty critical queue means no outstanding failure to report.
-    if (cCount === 0) lastCriticalError = null;
+    applyCriticalAccumulator(cAcc);
 
   } catch (err) {
     logger.error({ err }, '[Reliability] Error processing failed events');
@@ -716,9 +727,16 @@ export interface CriticalSinkReadiness {
   active_probe: boolean;
   configured: boolean;
   queued: number;
+  /** Count of due critical entries as of the last queue scan (snapshot, may lag). */
   retryable_now: number;
   next_due_at: string | null;
+  /**
+   * Live-computed: whether `next_due_at` is already in the past. Unlike
+   * `retryable_now` (a scan snapshot), this stays accurate between retry runs.
+   */
+  due_now: boolean;
   last_error: string | null;
+  /** Process-local: reset on restart, not reconstructed from persistent history. */
   last_delivered_at: string | null;
 }
 
@@ -748,6 +766,9 @@ export function getCriticalSinkReadiness(): CriticalSinkReadiness {
     status = 'ready';
   }
 
+  const dueNow =
+    criticalNextDueAt !== null && new Date(criticalNextDueAt).getTime() <= Date.now();
+
   return {
     status,
     critical_sink: 'chronik.agent.ledger',
@@ -757,6 +778,7 @@ export function getCriticalSinkReadiness(): CriticalSinkReadiness {
     queued: criticalQueuedCount,
     retryable_now: criticalRetryableNowCount,
     next_due_at: criticalNextDueAt,
+    due_now: dueNow,
     last_error: lastCriticalError,
     last_delivered_at: lastCriticalDeliveredAt,
   };
