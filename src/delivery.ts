@@ -222,6 +222,7 @@ export async function initDelivery(): Promise<void> {
     criticalQueuedCount = cLineCount;
     criticalRetryableNowCount = cRNow;
     criticalNextDueAt = cMinNext === Infinity ? null : new Date(cMinNext).toISOString();
+    if (cLineCount === 0) lastCriticalError = null;
   } catch (err) {
     logger.error({ err }, 'Error during startup initialization');
   }
@@ -284,6 +285,7 @@ async function processWriteQueue() {
     await batchAppendEvents(events);
 
     failedCount += events.length;
+    const nowMs = Date.now();
     for (const e of events) {
       lastError = e.error;
       const n = new Date(e.nextAttempt).getTime();
@@ -293,8 +295,13 @@ async function processWriteQueue() {
       if (e.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY) {
         criticalQueuedCount++;
         lastCriticalError = e.error;
-        if (!criticalNextDueAt || n < new Date(criticalNextDueAt).getTime()) {
-          criticalNextDueAt = e.nextAttempt;
+        // Only trust nextAttempt for due/next-due math when it parses (schema
+        // enforces date-time, but the queue file can be externally corrupted).
+        if (!isNaN(n)) {
+          if (!criticalNextDueAt || n < new Date(criticalNextDueAt).getTime()) {
+            criticalNextDueAt = e.nextAttempt;
+          }
+          if (n <= nowMs) criticalRetryableNowCount++;
         }
       }
     }
@@ -392,6 +399,7 @@ export async function retryFailedEvents(): Promise<void> {
       criticalQueuedCount = 0;
       criticalRetryableNowCount = 0;
       criticalNextDueAt = null;
+      lastCriticalError = null;
       return;
     }
 
@@ -444,6 +452,9 @@ export async function retryFailedEvents(): Promise<void> {
 
               if (result.status === 'delivered') {
                 lastCriticalDeliveredAt = new Date().toISOString();
+                // Recovery: a successful critical delivery clears the stale error
+                // so `last_error` reflects the current health, not history.
+                lastCriticalError = null;
                 logger.info(
                   { type: entry.event.type, label: 'Chronik agent.ledger' },
                   '[Retry] Successfully forwarded event to Chronik agent.ledger',
@@ -632,6 +643,8 @@ export async function retryFailedEvents(): Promise<void> {
     criticalQueuedCount = cCount;
     criticalRetryableNowCount = cRNow;
     criticalNextDueAt = cMinNext === Infinity ? null : new Date(cMinNext).toISOString();
+    // Invariant: an empty critical queue means no outstanding failure to report.
+    if (cCount === 0) lastCriticalError = null;
 
   } catch (err) {
     logger.error({ err }, '[Reliability] Error processing failed events');
@@ -693,6 +706,14 @@ export interface CriticalSinkReadiness {
    */
   status: CriticalSinkStatus;
   critical_sink: string;
+  /**
+   * How `status` is derived. `queue_state` = inferred from Plexer's local
+   * delivery queue, NOT from a live call to Chronik. This distinction matters:
+   * `ready` means "no agent.ledger backlog buffered", not "Chronik is reachable".
+   */
+  status_basis: 'queue_state';
+  /** Whether Plexer actively probed Chronik to derive `status`. Always false today. */
+  active_probe: boolean;
   configured: boolean;
   queued: number;
   retryable_now: number;
@@ -704,10 +725,17 @@ export interface CriticalSinkReadiness {
 /**
  * Internal diagnostic for the critical Chronik agent.ledger sink.
  *
- * This is Plexer's own observability surface, NOT the vendored
- * plexer.delivery.report.v1 contract, and NOT a producer gate: a degraded or
- * unconfigured sink does not mean producers should stop — Plexer keeps buffering
- * operational events for retry (relay degrades without changing task truth).
+ * Derived purely from local queue state (no active Chronik probe). This is
+ * Plexer's own observability surface, NOT the vendored plexer.delivery.report.v1
+ * contract, and NOT a producer gate: a degraded or unconfigured sink does not
+ * mean producers should stop — Plexer keeps buffering operational events for
+ * retry (relay degrades without changing task truth). It is likewise NOT a
+ * Kubernetes/load-balancer readinessProbe: pulling Plexer out of rotation while
+ * it is correctly buffering would defeat the queue.
+ *
+ * `configured` intentionally tracks only CHRONIK_URL: the sink is "wired" once a
+ * URL exists. A missing CHRONIK_TOKEN is an auth detail that surfaces as
+ * `degraded` (401 -> queued), not as `unconfigured`.
  */
 export function getCriticalSinkReadiness(): CriticalSinkReadiness {
   const configured = !!config.chronikUrl;
@@ -723,6 +751,8 @@ export function getCriticalSinkReadiness(): CriticalSinkReadiness {
   return {
     status,
     critical_sink: 'chronik.agent.ledger',
+    status_basis: 'queue_state',
+    active_probe: false,
     configured,
     queued: criticalQueuedCount,
     retryable_now: criticalRetryableNowCount,

@@ -188,6 +188,15 @@ describe('Critical-sink readiness', () => {
     expect(readiness.configured).toBe(false);
   });
 
+  it('exposes queue_state basis without an active probe', async () => {
+    mockReadLines([]);
+    await initDelivery();
+
+    const readiness = getCriticalSinkReadiness();
+    expect(readiness.status_basis).toBe('queue_state');
+    expect(readiness.active_probe).toBe(false);
+  });
+
   it('increments the critical count and records last_error when an agent.ledger event is queued', async () => {
     mockReadLines([]);
     await initDelivery();
@@ -200,6 +209,8 @@ describe('Critical-sink readiness', () => {
     expect(readiness.queued).toBe(1);
     expect(readiness.status).toBe('degraded');
     expect(readiness.last_error).toBe('chronik unreachable');
+    // A freshly queued event is scheduled ~30s out, so it is not yet due.
+    expect(readiness.retryable_now).toBe(0);
   });
 
   it('clears the critical count and stamps last_delivered_at after a successful retry', async () => {
@@ -214,6 +225,29 @@ describe('Critical-sink readiness', () => {
     expect(readiness.queued).toBe(0);
     expect(readiness.status).toBe('ready');
     expect(readiness.last_delivered_at).not.toBeNull();
+  });
+
+  it('clears last_error on recovery (degraded -> queued -> delivered -> ready)', async () => {
+    // 1. Drive a queued critical failure so last_error is populated.
+    mockReadLines([]);
+    await initDelivery();
+    await saveFailedChronikAgentLedgerEvent({ kind: 'agent.run.completed' }, 'chronik unreachable');
+    await flushFailedWrites();
+    const degraded = getCriticalSinkReadiness();
+    expect(degraded.status).toBe('degraded');
+    expect(degraded.last_error).toBe('chronik unreachable');
+
+    // 2. A retry cycle delivers the outstanding critical entry.
+    mockReadLines([criticalEntry(new Date(Date.now() - 1000).toISOString())]);
+    deliverMock.mockResolvedValue({ status: 'delivered', retryable: false, statusCode: 202 });
+    await retryFailedEvents();
+
+    // 3. Recovered: empty critical queue and no stale error.
+    const recovered = getCriticalSinkReadiness();
+    expect(recovered.status).toBe('ready');
+    expect(recovered.queued).toBe(0);
+    expect(recovered.last_error).toBeNull();
+    expect(recovered.last_delivered_at).not.toBeNull();
   });
 
   describe('GET /readiness endpoint', () => {

@@ -282,11 +282,13 @@ export function createServer(): Express {
     res.json({ status: 'ok' });
   });
 
-  // Readiness of the critical Chronik agent.ledger sink.
-  // Internal diagnostic (not the plexer.delivery.report.v1 contract): 200 when the
-  // sink is ready, 503 when it is degraded or unconfigured so operator/Leitstand
-  // probes can surface a critical-path impairment. This is NOT a producer gate —
-  // producers keep sending; Plexer buffers while the sink is degraded.
+  // Readiness of the critical Chronik agent.ledger sink, inferred from local
+  // queue state (status_basis=queue_state) — NOT an active Chronik reachability
+  // probe. Internal diagnostic (not the plexer.delivery.report.v1 contract):
+  // 200 when ready, 503 when degraded or unconfigured so operator/Leitstand
+  // dashboards can surface a critical-path impairment. This is NOT a producer
+  // gate and NOT a Kubernetes/load-balancer readinessProbe — producers keep
+  // sending and Plexer keeps buffering while the sink is degraded.
   app.get('/readiness', (req: Request, res: Response) => {
     const readiness = getCriticalSinkReadiness();
     const httpStatus = readiness.status === 'ready' ? 200 : 503;
