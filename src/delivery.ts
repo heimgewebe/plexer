@@ -93,6 +93,8 @@ function foldCriticalEntry(acc: CriticalAccumulator, entry: FailedEvent, nowMs: 
  *  nextDueAt against an unparseable nextAttempt (matching the critical path). */
 function recordQueuedEvent(e: FailedEvent, nowMs: number): void {
   failedCount++;
+  // e.error is a validated string (FailedEvent schema; saveFailedEvent takes a
+  // string), so this preserves the existing typed aggregate last_error semantics.
   lastError = e.error;
   const n = new Date(e.nextAttempt).getTime();
   if (Number.isFinite(n)) {
@@ -127,7 +129,10 @@ function applyCriticalAccumulator(acc: CriticalAccumulator): void {
 // persist a new event and bump counters mid-retry; the retry's final recompute
 // would then clobber that update. This mutex serializes the counter-touching
 // sections of processWriteQueue() and retryFailedEvents() (and initDelivery()),
-// so counters always reflect the persisted queue.
+// so counters are not clobbered by SAME-PROCESS write/retry interleavings.
+// Counters remain process-local snapshots: a second Plexer process could mutate
+// the file after this process's snapshot, leaving these counters to lag until
+// the next scan (cross-process FILE consistency is proper-lockfile's job).
 //
 // Lock ordering rule (must hold everywhere to avoid deadlock): acquire this
 // mutex BEFORE any proper-lockfile file lock; never acquire it while already
@@ -180,10 +185,12 @@ async function scanQueueFile(filePath: string, nowMs: number): Promise<QueueScan
 // Authoritative recompute source used by init, the early retry reset and the
 // final retry recompute. Takes the proper-lockfile file lock, copies the live
 // queue to a point-in-time snapshot, releases the lock, then scans the snapshot.
-// This keeps the scan consistent with the file-level (incl. cross-process) lock
-// that guards every queue mutation. Callers must hold withQueueState so the
-// counter apply is atomic vs the in-process write path. Returns null (do NOT
-// apply / do NOT clobber counters) if the snapshot could not be taken.
+// The snapshot copy is guarded by proper-lockfile (incl. cross-process); the
+// resulting counters are a PROCESS-LOCAL view. Callers must hold withQueueState
+// so the apply is atomic vs this process's write/retry interleavings; a second
+// process could still mutate the file after the snapshot, leaving this process's
+// counters to lag until its next scan. Returns null (do NOT apply / do NOT
+// clobber counters) if the snapshot could not be taken.
 async function scanQueueSnapshot(nowMs: number): Promise<QueueScan | null> {
   const dataDir = getDataDir();
   const failedLog = getFailedLogPath();
@@ -191,7 +198,7 @@ async function scanQueueSnapshot(nowMs: number): Promise<QueueScan | null> {
   await ensureDataDir();
   await ensureLockFile();
 
-  let snapshotPath: string | null = null;
+  let snapshot: string | null = null;
   let release;
   try {
     release = await lock(lockFile, { retries: LOCK_RETRIES });
@@ -199,7 +206,7 @@ async function scanQueueSnapshot(nowMs: number): Promise<QueueScan | null> {
     try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
     const candidate = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
     await fs.copyFile(failedLog, candidate);
-    snapshotPath = candidate;
+    snapshot = candidate;
   } catch (e) {
     logger.error({ err: e }, 'Failed to snapshot queue for metrics scan');
     return null; // keep prior counters rather than clobbering to zero
@@ -207,6 +214,9 @@ async function scanQueueSnapshot(nowMs: number): Promise<QueueScan | null> {
     if (release) await release();
   }
 
+  // Explicit narrowing to string (the catch above returns on failure).
+  if (snapshot === null) return null;
+  const snapshotPath: string = snapshot;
   try {
     return await scanQueueFile(snapshotPath, nowMs);
   } catch (e) {

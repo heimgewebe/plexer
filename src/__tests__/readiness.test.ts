@@ -95,6 +95,9 @@ describe('Critical-sink readiness (real fs)', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Reset (not just clear) so a gated mockImplementation from one test cannot
+    // leak into a later test that forgets to set its own delivery behavior.
+    deliverMock.mockReset();
     dir = path.join(os.tmpdir(), `plexer-readiness-${randomUUID()}`);
     await fs.mkdir(dir, { recursive: true });
     mockConfig.dataDir = dir;
@@ -243,9 +246,11 @@ describe('Critical-sink readiness (real fs)', () => {
       expect(r.last_error).toBe('persistent');
     });
 
-    // Early retry reset path (empty/no-processing) raced against a new write:
-    // the reset must not clobber the concurrently-queued critical event.
-    it('empty-reset path does not clobber a concurrent critical write', async () => {
+    // Stress/smoke test (NOT a deterministic interleaving proof): the two ops
+    // race, so retry may finish before the write lands. The invariant it guards
+    // is that the empty-reset path never permanently drops a concurrent write.
+    // The deterministic interleaving proof is the in-flight-retry test below.
+    it('empty-reset path does not clobber a concurrent critical write (stress)', async () => {
       await seedQueue([]);
       await initDelivery();
       expect(getCriticalSinkReadiness().status).toBe('ready');
