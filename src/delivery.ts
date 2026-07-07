@@ -33,6 +33,15 @@ let nextDueAt: string | null = null;
 
 const CHRONIK_AGENT_LEDGER_CONSUMER_KEY = 'chronik-agent-ledger';
 
+// Critical-sink (Chronik agent.ledger) diagnostics — a strict subset of the queue.
+// Internal observability only; NOT part of the plexer.delivery.report.v1 contract
+// and NOT a signal for producers to stop sending (Plexer keeps buffering when degraded).
+let criticalQueuedCount = 0;
+let criticalRetryableNowCount = 0;
+let criticalNextDueAt: string | null = null;
+let lastCriticalError: string | null = null;
+let lastCriticalDeliveredAt: string | null = null;
+
 const ajv = new Ajv({ strict: true });
 addFormats(ajv);
 
@@ -157,6 +166,9 @@ export async function initDelivery(): Promise<void> {
     let minNext = Infinity;
     const now = Date.now();
     let rNow = 0;
+    let cLineCount = 0;
+    let cMinNext = Infinity;
+    let cRNow = 0;
     let snapshotPath: string | null = null;
 
     try {
@@ -182,9 +194,15 @@ export async function initDelivery(): Promise<void> {
                 try {
                 const e = JSON.parse(line) as FailedEvent;
                 const n = new Date(e.nextAttempt).getTime();
+                const isCritical = e.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY;
+                if (isCritical) cLineCount++;
                 if (!isNaN(n)) {
                     if (n < minNext) minNext = n;
                     if (n <= now) rNow++;
+                    if (isCritical) {
+                      if (n < cMinNext) cMinNext = n;
+                      if (n <= now) cRNow++;
+                    }
                 }
                 } catch {}
             }
@@ -201,6 +219,9 @@ export async function initDelivery(): Promise<void> {
     failedCount = lineCount;
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
+    criticalQueuedCount = cLineCount;
+    criticalRetryableNowCount = cRNow;
+    criticalNextDueAt = cMinNext === Infinity ? null : new Date(cMinNext).toISOString();
   } catch (err) {
     logger.error({ err }, 'Error during startup initialization');
   }
@@ -268,6 +289,13 @@ async function processWriteQueue() {
       const n = new Date(e.nextAttempt).getTime();
       if (!nextDueAt || n < new Date(nextDueAt).getTime()) {
         nextDueAt = e.nextAttempt;
+      }
+      if (e.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY) {
+        criticalQueuedCount++;
+        lastCriticalError = e.error;
+        if (!criticalNextDueAt || n < new Date(criticalNextDueAt).getTime()) {
+          criticalNextDueAt = e.nextAttempt;
+        }
       }
     }
 
@@ -361,6 +389,9 @@ export async function retryFailedEvents(): Promise<void> {
       failedCount = 0;
       retryableNowCount = 0;
       nextDueAt = null;
+      criticalQueuedCount = 0;
+      criticalRetryableNowCount = 0;
+      criticalNextDueAt = null;
       return;
     }
 
@@ -412,6 +443,7 @@ export async function retryFailedEvents(): Promise<void> {
               const result = await deliverToChronikAgentLedger(entry.event.payload);
 
               if (result.status === 'delivered') {
+                lastCriticalDeliveredAt = new Date().toISOString();
                 logger.info(
                   { type: entry.event.type, label: 'Chronik agent.ledger' },
                   '[Retry] Successfully forwarded event to Chronik agent.ledger',
@@ -442,6 +474,7 @@ export async function retryFailedEvents(): Promise<void> {
               entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
               entry.error = result.error ?? result.status;
               lastError = entry.error;
+              lastCriticalError = entry.error;
 
               logger.warn(
                 { error: entry.error, retryCount: entry.retryCount },
@@ -574,19 +607,31 @@ export async function retryFailedEvents(): Promise<void> {
     // Reset global metrics based on remaining events
     let minNext = Infinity;
     let rNow = 0;
+    let cCount = 0;
+    let cMinNext = Infinity;
+    let cRNow = 0;
     const nowAfter = Date.now();
 
     for (const e of remainingEvents) {
        const n = new Date(e.nextAttempt).getTime();
+       const isCritical = e.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY;
+       if (isCritical) cCount++;
        if (!isNaN(n)) {
           if (n < minNext) minNext = n;
           if (n <= nowAfter) rNow++;
+          if (isCritical) {
+            if (n < cMinNext) cMinNext = n;
+            if (n <= nowAfter) cRNow++;
+          }
        }
     }
 
     failedCount = remainingEvents.length;
     retryableNowCount = rNow;
     nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
+    criticalQueuedCount = cCount;
+    criticalRetryableNowCount = cRNow;
+    criticalNextDueAt = cMinNext === Infinity ? null : new Date(cMinNext).toISOString();
 
   } catch (err) {
     logger.error({ err }, '[Reliability] Error processing failed events');
@@ -636,4 +681,53 @@ export function getDeliveryMetrics(pendingCount: number): PlexerDeliveryReport {
 
 export function getNextDueAt(): string | null {
   return nextDueAt;
+}
+
+export type CriticalSinkStatus = 'ready' | 'degraded' | 'unconfigured';
+
+export interface CriticalSinkReadiness {
+  /**
+   * ready: sink configured and no operational events waiting for it.
+   * degraded: sink configured but agent.ledger events are queued (undelivered).
+   * unconfigured: no CHRONIK_URL, so the critical sink is not wired.
+   */
+  status: CriticalSinkStatus;
+  critical_sink: string;
+  configured: boolean;
+  queued: number;
+  retryable_now: number;
+  next_due_at: string | null;
+  last_error: string | null;
+  last_delivered_at: string | null;
+}
+
+/**
+ * Internal diagnostic for the critical Chronik agent.ledger sink.
+ *
+ * This is Plexer's own observability surface, NOT the vendored
+ * plexer.delivery.report.v1 contract, and NOT a producer gate: a degraded or
+ * unconfigured sink does not mean producers should stop — Plexer keeps buffering
+ * operational events for retry (relay degrades without changing task truth).
+ */
+export function getCriticalSinkReadiness(): CriticalSinkReadiness {
+  const configured = !!config.chronikUrl;
+  let status: CriticalSinkStatus;
+  if (!configured) {
+    status = 'unconfigured';
+  } else if (criticalQueuedCount > 0) {
+    status = 'degraded';
+  } else {
+    status = 'ready';
+  }
+
+  return {
+    status,
+    critical_sink: 'chronik.agent.ledger',
+    configured,
+    queued: criticalQueuedCount,
+    retryable_now: criticalRetryableNowCount,
+    next_due_at: criticalNextDueAt,
+    last_error: lastCriticalError,
+    last_delivered_at: lastCriticalDeliveredAt,
+  };
 }

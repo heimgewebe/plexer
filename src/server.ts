@@ -16,6 +16,7 @@ import pLimit from 'p-limit';
 import {
   saveFailedEvent,
   getDeliveryMetrics,
+  getCriticalSinkReadiness,
   validateDeliveryReport,
   validateEventEnvelope,
   saveFailedChronikAgentLedgerEvent,
@@ -279,6 +280,17 @@ export function createServer(): Express {
 
   app.get('/health', (req: Request, res: Response) => {
     res.json({ status: 'ok' });
+  });
+
+  // Readiness of the critical Chronik agent.ledger sink.
+  // Internal diagnostic (not the plexer.delivery.report.v1 contract): 200 when the
+  // sink is ready, 503 when it is degraded or unconfigured so operator/Leitstand
+  // probes can surface a critical-path impairment. This is NOT a producer gate —
+  // producers keep sending; Plexer buffers while the sink is degraded.
+  app.get('/readiness', (req: Request, res: Response) => {
+    const readiness = getCriticalSinkReadiness();
+    const httpStatus = readiness.status === 'ready' ? 200 : 503;
+    res.status(httpStatus).json(readiness);
   });
 
   app.get('/status', (req: Request, res: Response) => {

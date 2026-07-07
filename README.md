@@ -129,3 +129,9 @@ Plexer ist **Functionality-first** ausgelegt: Zustellung und Robustheit stehen i
 - `GET /status`: Liefert Metriken zur Delivery-Queue.
   - Payload folgt dem Contract: `plexer.delivery.report.v1`.
   - Felder: `pending` (in-flight), `failed` (in queue), `retryable_now` (fällig), `next_due_at` (nächster Retry).
+- `GET /health`: Liveness. Solange der Prozess läuft, `200 {"status":"ok"}`. Reflektiert **nicht** den Zustand nachgelagerter Konsumenten.
+- `GET /readiness`: Readiness der **kritischen** Chronik-Senke (`agent.ledger`). Internes Diagnostik-Signal für Operator/Leitstand, das die kritische Teilmenge der Queue isoliert von Best-Effort-/Legacy-Fehlern zeigt.
+  - `status`: `ready` (Senke konfiguriert, keine gequeuten agent.ledger-Events), `degraded` (konfiguriert, aber agent.ledger-Events warten) oder `unconfigured` (kein `CHRONIK_URL`).
+  - HTTP: `200` bei `ready`, sonst `503` — damit ein `curl -f`/Uptime-Probe eine Beeinträchtigung des kritischen Pfads sichtbar macht.
+  - Felder: `configured`, `queued`, `retryable_now`, `next_due_at`, `last_error`, `last_delivered_at`.
+  - **Abgrenzung (Doktrin):** `/readiness` ist Plexers eigenes Diagnostik-Signal, **nicht** der `plexer.delivery.report.v1`-Contract und **kein Producer-Gate**. Ein `degraded`/`unconfigured` Zustand heißt nicht, dass Producer aufhören sollen zu senden — Plexer puffert die operativen Events weiter für den Retry (Relay degradiert, ohne die Task-Wahrheit zu ändern).
