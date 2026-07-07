@@ -42,6 +42,12 @@ let criticalNextDueAt: string | null = null;
 let lastCriticalError: string | null = null;
 let lastCriticalDeliveredAt: string | null = null;
 
+/** Coerce a queue entry's `error` to a usable string, or null. Type-safe: a
+ *  corrupted queue line with a non-string error never becomes last_error. */
+function extractErrorString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 // Single source of truth for summarizing the critical (Chronik agent.ledger)
 // subset of the queue, so init-scan and post-retry recompute cannot drift —
 // especially on `lastError`, which must be reconstructed from the queue, not
@@ -52,17 +58,27 @@ interface CriticalAccumulator {
   retryableNow: number;
   minNext: number;
   lastError: string | null;
+  // lastAttempt (ms) of the entry that provided lastError; -Infinity if none.
+  // Used to prefer the most recently attempted open entry's error.
+  lastErrorAt: number;
 }
 
 function newCriticalAccumulator(): CriticalAccumulator {
-  return { queued: 0, retryableNow: 0, minNext: Infinity, lastError: null };
+  return { queued: 0, retryableNow: 0, minNext: Infinity, lastError: null, lastErrorAt: -Infinity };
 }
 
 function foldCriticalEntry(acc: CriticalAccumulator, entry: FailedEvent, nowMs: number): void {
   if (entry.consumerKey !== CHRONIK_AGENT_LEDGER_CONSUMER_KEY) return;
   acc.queued++;
-  if (typeof entry.error === 'string' && entry.error.length > 0) {
-    acc.lastError = entry.error;
+  const err = extractErrorString(entry.error);
+  if (err !== null) {
+    const at = new Date(entry.lastAttempt).getTime();
+    const atCmp = isNaN(at) ? -Infinity : at;
+    // Prefer the most recently attempted open entry; ties fall back to scan order.
+    if (acc.lastError === null || atCmp >= acc.lastErrorAt) {
+      acc.lastError = err;
+      acc.lastErrorAt = atCmp;
+    }
   }
   const n = new Date(entry.nextAttempt).getTime();
   if (isNaN(n)) return;
@@ -76,6 +92,71 @@ function applyCriticalAccumulator(acc: CriticalAccumulator): void {
   criticalNextDueAt = acc.minNext === Infinity ? null : new Date(acc.minNext).toISOString();
   // Invariant: an empty critical queue has no outstanding failure to report.
   lastCriticalError = acc.queued === 0 ? null : acc.lastError;
+}
+
+// ---------------------------------------------------------------------------
+// In-process queue-state mutex.
+//
+// proper-lockfile serializes *file* mutations (including across processes) but
+// NOT the in-memory metric counters. Because retryFailedEvents() releases the
+// file lock before awaiting delivery, a concurrent processWriteQueue() can
+// persist a new event and bump counters mid-retry; the retry's final recompute
+// would then clobber that update. This mutex serializes the counter-touching
+// sections of processWriteQueue() and retryFailedEvents() (and initDelivery()),
+// so counters always reflect the persisted queue.
+//
+// Lock ordering rule (must hold everywhere to avoid deadlock): acquire this
+// mutex BEFORE any proper-lockfile file lock; never acquire it while already
+// holding a file lock.
+let queueStateChain: Promise<unknown> = Promise.resolve();
+function withQueueState<T>(fn: () => Promise<T>): Promise<T> {
+  const result = queueStateChain.then(() => fn());
+  // Keep the chain alive even if fn rejects, so the mutex never deadlocks.
+  queueStateChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+interface QueueScan {
+  lineCount: number;
+  retryableNow: number;
+  minNext: number;
+  critical: CriticalAccumulator;
+}
+
+// Authoritative recompute source: fold the actual persisted queue file. Callers
+// must hold withQueueState so no concurrent writer changes counters between the
+// scan and the apply.
+async function scanQueueFile(filePath: string, nowMs: number): Promise<QueueScan> {
+  const scan: QueueScan = {
+    lineCount: 0,
+    retryableNow: 0,
+    minNext: Infinity,
+    critical: newCriticalAccumulator(),
+  };
+  for await (const line of readLinesSafe(filePath)) {
+    if (!line.trim()) continue;
+    scan.lineCount++;
+    let entry: FailedEvent;
+    try {
+      entry = JSON.parse(line) as FailedEvent;
+    } catch {
+      continue; // corrupt line: counted as a line, but not folded
+    }
+    const n = new Date(entry.nextAttempt).getTime();
+    if (!isNaN(n)) {
+      if (n < scan.minNext) scan.minNext = n;
+      if (n <= nowMs) scan.retryableNow++;
+    }
+    foldCriticalEntry(scan.critical, entry, nowMs);
+  }
+  return scan;
+}
+
+function applyQueueScan(scan: QueueScan): void {
+  failedCount = scan.lineCount;
+  retryableNowCount = scan.retryableNow;
+  nextDueAt = scan.minNext === Infinity ? null : new Date(scan.minNext).toISOString();
+  applyCriticalAccumulator(scan.critical);
 }
 
 const ajv = new Ajv({ strict: true });
@@ -198,57 +279,40 @@ export async function initDelivery(): Promise<void> {
     // Ensure FAILED_LOG exists for reading
     try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
 
-    let lineCount = 0;
-    let minNext = Infinity;
-    const now = Date.now();
-    let rNow = 0;
-    const cAcc = newCriticalAccumulator();
-    let snapshotPath: string | null = null;
+    // Hold the queue-state mutex across snapshot + scan + apply so a concurrent
+    // save cannot land between the point-in-time copy and the counter set
+    // (which would otherwise clobber it). Mutex is acquired before the file lock.
+    await withQueueState(async () => {
+      const now = Date.now();
+      let snapshotPath: string | null = null;
 
-    try {
-      // Lock to snapshot the file via copy
-      // We use copyFile to ensure a consistent point-in-time snapshot.
-      let releaseScan;
       try {
-        releaseScan = await lock(lockFile, { retries: LOCK_RETRIES });
-        const candidatePath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
-        await fs.copyFile(failedLog, candidatePath);
-        snapshotPath = candidatePath;
-      } catch (e) {
-        logger.error({ err: e }, 'Failed to lock or copy FAILED_LOG during metrics scan');
-      } finally {
-        if (releaseScan) await releaseScan();
-      }
-
-      if (snapshotPath) {
+        // Lock to snapshot the file via copy for a consistent point-in-time read.
+        let releaseScan;
         try {
-            for await (const line of readLinesSafe(snapshotPath)) {
-                if (!line.trim()) continue;
-                lineCount++;
-                try {
-                const e = JSON.parse(line) as FailedEvent;
-                const n = new Date(e.nextAttempt).getTime();
-                if (!isNaN(n)) {
-                    if (n < minNext) minNext = n;
-                    if (n <= now) rNow++;
-                }
-                foldCriticalEntry(cAcc, e, now);
-                } catch {}
-            }
+          releaseScan = await lock(lockFile, { retries: LOCK_RETRIES });
+          const candidatePath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
+          await fs.copyFile(failedLog, candidatePath);
+          snapshotPath = candidatePath;
         } catch (e) {
-             logger.error({ err: e }, 'Failed to scan snapshot during metrics scan');
+          logger.error({ err: e }, 'Failed to lock or copy FAILED_LOG during metrics scan');
+        } finally {
+          if (releaseScan) await releaseScan();
+        }
+
+        if (snapshotPath) {
+          try {
+            applyQueueScan(await scanQueueFile(snapshotPath, now));
+          } catch (e) {
+            logger.error({ err: e }, 'Failed to scan snapshot during metrics scan');
+          }
+        }
+      } finally {
+        if (snapshotPath) {
+          try { await fs.unlink(snapshotPath); } catch {}
         }
       }
-    } finally {
-      if (snapshotPath) {
-        try { await fs.unlink(snapshotPath); } catch {}
-      }
-    }
-
-    failedCount = lineCount;
-    retryableNowCount = rNow;
-    nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
-    applyCriticalAccumulator(cAcc);
+    });
   } catch (err) {
     logger.error({ err }, 'Error during startup initialization');
   }
@@ -308,29 +372,35 @@ async function processWriteQueue() {
   try {
     await ensureDataDir();
     await ensureLockFile();
-    await batchAppendEvents(events);
 
-    failedCount += events.length;
-    const nowMs = Date.now();
-    for (const e of events) {
-      lastError = e.error;
-      const n = new Date(e.nextAttempt).getTime();
-      if (!nextDueAt || n < new Date(nextDueAt).getTime()) {
-        nextDueAt = e.nextAttempt;
-      }
-      if (e.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY) {
-        criticalQueuedCount++;
-        lastCriticalError = e.error;
-        // Only trust nextAttempt for due/next-due math when it parses (schema
-        // enforces date-time, but the queue file can be externally corrupted).
-        if (!isNaN(n)) {
-          if (!criticalNextDueAt || n < new Date(criticalNextDueAt).getTime()) {
-            criticalNextDueAt = e.nextAttempt;
+    // Persist + count under the queue-state mutex so this update is atomic with
+    // respect to retryFailedEvents()'s final recompute (mutex before file lock).
+    await withQueueState(async () => {
+      await batchAppendEvents(events);
+
+      failedCount += events.length;
+      const nowMs = Date.now();
+      for (const e of events) {
+        lastError = e.error;
+        const n = new Date(e.nextAttempt).getTime();
+        if (!nextDueAt || n < new Date(nextDueAt).getTime()) {
+          nextDueAt = e.nextAttempt;
+        }
+        if (e.consumerKey === CHRONIK_AGENT_LEDGER_CONSUMER_KEY) {
+          criticalQueuedCount++;
+          const err = extractErrorString(e.error);
+          if (err !== null) lastCriticalError = err;
+          // Only trust nextAttempt for due/next-due math when it parses (schema
+          // enforces date-time, but the queue file can be externally corrupted).
+          if (!isNaN(n)) {
+            if (!criticalNextDueAt || n < new Date(criticalNextDueAt).getTime()) {
+              criticalNextDueAt = e.nextAttempt;
+            }
+            if (n <= nowMs) criticalRetryableNowCount++;
           }
-          if (n <= nowMs) criticalRetryableNowCount++;
         }
       }
-    }
+    });
 
     batch.forEach((i) => i.resolve());
   } catch (err) {
@@ -629,33 +699,25 @@ export async function retryFailedEvents(): Promise<void> {
       await Promise.all(activePromises);
     }
 
-    // Batch write remaining events first (crash safety)
-    if (remainingEvents.length > 0) {
-      await batchAppendEvents(remainingEvents);
-    }
+    // Persist remaining events and recompute metrics under the queue-state mutex.
+    // The file lock was released at step 4, so events queued during delivery are
+    // already in failedLog; recomputing from that live file (not just
+    // remainingEvents) means those concurrent writes are NOT lost. The mutex
+    // makes the append + rescan + apply atomic vs processWriteQueue's counting.
+    // (Mutex acquired before the file lock inside batchAppendEvents.)
+    await withQueueState(async () => {
+      // Batch write remaining events first (crash safety)
+      if (remainingEvents.length > 0) {
+        await batchAppendEvents(remainingEvents);
+      }
 
-    // THEN cleanup processing file
-    await fs.unlink(processingFile);
+      // THEN cleanup processing file
+      await fs.unlink(processingFile!);
 
-    // Reset global metrics based on remaining events
-    let minNext = Infinity;
-    let rNow = 0;
-    const cAcc = newCriticalAccumulator();
-    const nowAfter = Date.now();
-
-    for (const e of remainingEvents) {
-       const n = new Date(e.nextAttempt).getTime();
-       if (!isNaN(n)) {
-          if (n < minNext) minNext = n;
-          if (n <= nowAfter) rNow++;
-       }
-       foldCriticalEntry(cAcc, e, nowAfter);
-    }
-
-    failedCount = remainingEvents.length;
-    retryableNowCount = rNow;
-    nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
-    applyCriticalAccumulator(cAcc);
+      // Authoritative recompute from the live queue file (remaining + any events
+      // persisted concurrently during this retry run).
+      applyQueueScan(await scanQueueFile(failedLog, Date.now()));
+    });
 
   } catch (err) {
     logger.error({ err }, '[Reliability] Error processing failed events');
@@ -766,8 +828,9 @@ export function getCriticalSinkReadiness(): CriticalSinkReadiness {
     status = 'ready';
   }
 
-  const dueNow =
-    criticalNextDueAt !== null && new Date(criticalNextDueAt).getTime() <= Date.now();
+  const nowMs = Date.now();
+  const dueAtMs = criticalNextDueAt === null ? NaN : new Date(criticalNextDueAt).getTime();
+  const dueNow = Number.isFinite(dueAtMs) && dueAtMs <= nowMs;
 
   return {
     status,
