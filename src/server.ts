@@ -16,6 +16,7 @@ import pLimit from 'p-limit';
 import {
   saveFailedEvent,
   getDeliveryMetrics,
+  getCriticalSinkReadiness,
   validateDeliveryReport,
   validateEventEnvelope,
   saveFailedChronikAgentLedgerEvent,
@@ -279,6 +280,27 @@ export function createServer(): Express {
 
   app.get('/health', (req: Request, res: Response) => {
     res.json({ status: 'ok' });
+  });
+
+  // Readiness of the critical Chronik agent.ledger sink, inferred from local
+  // queue state (status_basis=queue_state) — NOT an active Chronik reachability
+  // probe. Internal diagnostic (not the plexer.delivery.report.v1 contract):
+  // 200 when ready, 503 when degraded or unconfigured so operator/Leitstand
+  // dashboards can surface a critical-path impairment. This is NOT a producer
+  // gate and NOT a Kubernetes/load-balancer readinessProbe — producers keep
+  // sending and Plexer keeps buffering while the sink is degraded.
+  app.get('/readiness', (req: Request, res: Response) => {
+    const readiness = getCriticalSinkReadiness();
+    const httpStatus = readiness.status === 'ready' ? 200 : 503;
+    res.status(httpStatus).json(readiness);
+  });
+
+  // Canonical dashboard endpoint: same diagnostic payload as /readiness but
+  // ALWAYS HTTP 200. This is the safe endpoint for standard monitoring
+  // (Uptime Kuma, systemd watchdog, Leitstand) that must not be tricked into
+  // traffic-gating by /readiness's 503. Read `status` from the body instead.
+  app.get('/diagnostics/critical-sink', (req: Request, res: Response) => {
+    res.status(200).json(getCriticalSinkReadiness());
   });
 
   app.get('/status', (req: Request, res: Response) => {

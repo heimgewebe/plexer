@@ -588,7 +588,7 @@ describe('Delivery Reliability', () => {
         // Should log error
         expect(logger.error).toHaveBeenCalledWith(
             expect.objectContaining({ err: expect.any(Error) }),
-            expect.stringContaining('Failed to lock or copy FAILED_LOG')
+            expect.stringContaining('Failed to snapshot queue for metrics scan')
         );
 
         // Should NOT process snapshot
@@ -632,7 +632,7 @@ describe('Delivery Reliability', () => {
         // Should log error
         expect(logger.error).toHaveBeenCalledWith(
             expect.objectContaining({ err: expect.any(Error) }),
-            expect.stringContaining('Failed to lock or copy FAILED_LOG')
+            expect.stringContaining('Failed to snapshot queue for metrics scan')
         );
 
         // Should NOT release lock (it wasn't acquired)

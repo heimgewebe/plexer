@@ -33,6 +33,207 @@ let nextDueAt: string | null = null;
 
 const CHRONIK_AGENT_LEDGER_CONSUMER_KEY = 'chronik-agent-ledger';
 
+// Critical-sink (Chronik agent.ledger) diagnostics — a strict subset of the queue.
+// Internal observability only; NOT part of the plexer.delivery.report.v1 contract
+// and NOT a signal for producers to stop sending (Plexer keeps buffering when degraded).
+let criticalQueuedCount = 0;
+let criticalRetryableNowCount = 0;
+let criticalNextDueAt: string | null = null;
+let lastCriticalError: string | null = null;
+let lastCriticalDeliveredAt: string | null = null;
+
+/** Coerce a queue entry's `error` to a usable string, or null. Type-safe: a
+ *  corrupted queue line with a non-string error never becomes last_error. */
+function extractErrorString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+// Single source of truth for *summarizing* the critical (Chronik agent.ledger)
+// subset of the queue from a scan, so every authoritative recompute (init and
+// post-retry) folds identically — especially on `lastError`, which is
+// reconstructed from the queue, not tracked ad hoc. The incremental write path
+// uses recordQueuedEvent() instead (a delta, not a summary).
+interface CriticalAccumulator {
+  queued: number;
+  retryableNow: number;
+  minNext: number;
+  lastError: string | null;
+  // lastAttempt (ms) of the entry that provided lastError; -Infinity if none.
+  // Used to prefer the most recently attempted open entry's error.
+  lastErrorAt: number;
+}
+
+function newCriticalAccumulator(): CriticalAccumulator {
+  return { queued: 0, retryableNow: 0, minNext: Infinity, lastError: null, lastErrorAt: -Infinity };
+}
+
+function foldCriticalEntry(acc: CriticalAccumulator, entry: FailedEvent, nowMs: number): void {
+  if (entry.consumerKey !== CHRONIK_AGENT_LEDGER_CONSUMER_KEY) return;
+  acc.queued++;
+  const err = extractErrorString(entry.error);
+  if (err !== null) {
+    // Recency rank for choosing which open entry's error to surface:
+    //   1. valid lastAttempt, else 2. valid nextAttempt, else 3. scan order (ties).
+    const at = new Date(entry.lastAttempt).getTime();
+    const nn = new Date(entry.nextAttempt).getTime();
+    const rank = !isNaN(at) ? at : (!isNaN(nn) ? nn : -Infinity);
+    if (acc.lastError === null || rank >= acc.lastErrorAt) {
+      acc.lastError = err;
+      acc.lastErrorAt = rank;
+    }
+  }
+  const n = new Date(entry.nextAttempt).getTime();
+  if (isNaN(n)) return;
+  if (n <= nowMs) acc.retryableNow++;
+  if (n < acc.minNext) acc.minNext = n;
+}
+
+/** Incremental delta for one newly-queued event (write path). Keeps the write
+ *  path a single defined path rather than ad-hoc mutation, and guards the global
+ *  nextDueAt against an unparseable nextAttempt (matching the critical path). */
+function recordQueuedEvent(e: FailedEvent, nowMs: number): void {
+  failedCount++;
+  // e.error is a validated string (FailedEvent schema; saveFailedEvent takes a
+  // string), so this preserves the existing typed aggregate last_error semantics.
+  lastError = e.error;
+  const n = new Date(e.nextAttempt).getTime();
+  if (Number.isFinite(n)) {
+    const curMs = nextDueAt === null ? Infinity : new Date(nextDueAt).getTime();
+    if (!Number.isFinite(curMs) || n < curMs) nextDueAt = e.nextAttempt;
+  }
+  if (e.consumerKey !== CHRONIK_AGENT_LEDGER_CONSUMER_KEY) return;
+  criticalQueuedCount++;
+  const err = extractErrorString(e.error);
+  if (err !== null) lastCriticalError = err;
+  if (Number.isFinite(n)) {
+    const curCritMs = criticalNextDueAt === null ? Infinity : new Date(criticalNextDueAt).getTime();
+    if (!Number.isFinite(curCritMs) || n < curCritMs) criticalNextDueAt = e.nextAttempt;
+    if (n <= nowMs) criticalRetryableNowCount++;
+  }
+}
+
+function applyCriticalAccumulator(acc: CriticalAccumulator): void {
+  criticalQueuedCount = acc.queued;
+  criticalRetryableNowCount = acc.retryableNow;
+  criticalNextDueAt = acc.minNext === Infinity ? null : new Date(acc.minNext).toISOString();
+  // Invariant: an empty critical queue has no outstanding failure to report.
+  lastCriticalError = acc.queued === 0 ? null : acc.lastError;
+}
+
+// ---------------------------------------------------------------------------
+// In-process queue-state mutex.
+//
+// proper-lockfile serializes *file* mutations (including across processes) but
+// NOT the in-memory metric counters. Because retryFailedEvents() releases the
+// file lock before awaiting delivery, a concurrent processWriteQueue() can
+// persist a new event and bump counters mid-retry; the retry's final recompute
+// would then clobber that update. This mutex serializes the counter-touching
+// sections of processWriteQueue() and retryFailedEvents() (and initDelivery()),
+// so counters are not clobbered by SAME-PROCESS write/retry interleavings.
+// Counters remain process-local snapshots: a second Plexer process could mutate
+// the file after this process's snapshot, leaving these counters to lag until
+// the next scan (cross-process FILE consistency is proper-lockfile's job).
+//
+// Lock ordering rule (must hold everywhere to avoid deadlock): acquire this
+// mutex BEFORE any proper-lockfile file lock; never acquire it while already
+// holding a file lock.
+let queueStateChain: Promise<unknown> = Promise.resolve();
+function withQueueState<T>(fn: () => Promise<T>): Promise<T> {
+  const result = queueStateChain.then(() => fn());
+  // Keep the chain alive even if fn rejects, so the mutex never deadlocks.
+  queueStateChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+interface QueueScan {
+  lineCount: number;
+  retryableNow: number;
+  minNext: number;
+  critical: CriticalAccumulator;
+}
+
+function newQueueScan(): QueueScan {
+  return { lineCount: 0, retryableNow: 0, minNext: Infinity, critical: newCriticalAccumulator() };
+}
+
+// Fold a single queue file (already a stable point-in-time source, e.g. a
+// snapshot copy). NOTE: `lineCount` counts every non-empty line, including
+// unparseable ones, so failedCount == "lines in the queue file". Corrupt lines
+// are not folded into the critical/due metrics. A dedicated corrupt_lines signal
+// is a possible follow-up, out of scope for this slice.
+async function scanQueueFile(filePath: string, nowMs: number): Promise<QueueScan> {
+  const scan = newQueueScan();
+  for await (const line of readLinesSafe(filePath)) {
+    if (!line.trim()) continue;
+    scan.lineCount++;
+    let entry: FailedEvent;
+    try {
+      entry = JSON.parse(line) as FailedEvent;
+    } catch {
+      continue; // corrupt line: counted as a line, but not folded
+    }
+    const n = new Date(entry.nextAttempt).getTime();
+    if (!isNaN(n)) {
+      if (n < scan.minNext) scan.minNext = n;
+      if (n <= nowMs) scan.retryableNow++;
+    }
+    foldCriticalEntry(scan.critical, entry, nowMs);
+  }
+  return scan;
+}
+
+// Authoritative recompute source used by init, the early retry reset and the
+// final retry recompute. Takes the proper-lockfile file lock, copies the live
+// queue to a point-in-time snapshot, releases the lock, then scans the snapshot.
+// The snapshot copy is guarded by proper-lockfile (incl. cross-process); the
+// resulting counters are a PROCESS-LOCAL view. Callers must hold withQueueState
+// so the apply is atomic vs this process's write/retry interleavings; a second
+// process could still mutate the file after the snapshot, leaving this process's
+// counters to lag until its next scan. Returns null (do NOT apply / do NOT
+// clobber counters) if the snapshot could not be taken.
+async function scanQueueSnapshot(nowMs: number): Promise<QueueScan | null> {
+  const dataDir = getDataDir();
+  const failedLog = getFailedLogPath();
+  const lockFile = getLockFilePath();
+  await ensureDataDir();
+  await ensureLockFile();
+
+  let snapshot: string | null = null;
+  let release;
+  try {
+    release = await lock(lockFile, { retries: LOCK_RETRIES });
+    // Ensure the source exists so copyFile does not throw on a fresh queue.
+    try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
+    const candidate = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
+    await fs.copyFile(failedLog, candidate);
+    snapshot = candidate;
+  } catch (e) {
+    logger.error({ err: e }, 'Failed to snapshot queue for metrics scan');
+    return null; // keep prior counters rather than clobbering to zero
+  } finally {
+    if (release) await release();
+  }
+
+  // Explicit narrowing to string (the catch above returns on failure).
+  if (snapshot === null) return null;
+  const snapshotPath: string = snapshot;
+  try {
+    return await scanQueueFile(snapshotPath, nowMs);
+  } catch (e) {
+    logger.error({ err: e }, 'Failed to scan queue snapshot');
+    return null;
+  } finally {
+    try { await fs.unlink(snapshotPath); } catch {}
+  }
+}
+
+function applyQueueScan(scan: QueueScan): void {
+  failedCount = scan.lineCount;
+  retryableNowCount = scan.retryableNow;
+  nextDueAt = scan.minNext === Infinity ? null : new Date(scan.minNext).toISOString();
+  applyCriticalAccumulator(scan.critical);
+}
+
 const ajv = new Ajv({ strict: true });
 addFormats(ajv);
 
@@ -149,58 +350,13 @@ export async function initDelivery(): Promise<void> {
       }
     }
 
-    // 2. Metrics Scan
-    // Ensure FAILED_LOG exists for reading
-    try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
-
-    let lineCount = 0;
-    let minNext = Infinity;
-    const now = Date.now();
-    let rNow = 0;
-    let snapshotPath: string | null = null;
-
-    try {
-      // Lock to snapshot the file via copy
-      // We use copyFile to ensure a consistent point-in-time snapshot.
-      let releaseScan;
-      try {
-        releaseScan = await lock(lockFile, { retries: LOCK_RETRIES });
-        const candidatePath = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
-        await fs.copyFile(failedLog, candidatePath);
-        snapshotPath = candidatePath;
-      } catch (e) {
-        logger.error({ err: e }, 'Failed to lock or copy FAILED_LOG during metrics scan');
-      } finally {
-        if (releaseScan) await releaseScan();
-      }
-
-      if (snapshotPath) {
-        try {
-            for await (const line of readLinesSafe(snapshotPath)) {
-                if (!line.trim()) continue;
-                lineCount++;
-                try {
-                const e = JSON.parse(line) as FailedEvent;
-                const n = new Date(e.nextAttempt).getTime();
-                if (!isNaN(n)) {
-                    if (n < minNext) minNext = n;
-                    if (n <= now) rNow++;
-                }
-                } catch {}
-            }
-        } catch (e) {
-             logger.error({ err: e }, 'Failed to scan snapshot during metrics scan');
-        }
-      }
-    } finally {
-      if (snapshotPath) {
-        try { await fs.unlink(snapshotPath); } catch {}
-      }
-    }
-
-    failedCount = lineCount;
-    retryableNowCount = rNow;
-    nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
+    // 2. Metrics Scan — authoritative snapshot scan under the queue-state mutex,
+    // so a concurrent save cannot land between the point-in-time copy and the
+    // counter apply. Mutex is acquired before the file lock (inside the helper).
+    await withQueueState(async () => {
+      const scan = await scanQueueSnapshot(Date.now());
+      if (scan) applyQueueScan(scan);
+    });
   } catch (err) {
     logger.error({ err }, 'Error during startup initialization');
   }
@@ -260,16 +416,14 @@ async function processWriteQueue() {
   try {
     await ensureDataDir();
     await ensureLockFile();
-    await batchAppendEvents(events);
 
-    failedCount += events.length;
-    for (const e of events) {
-      lastError = e.error;
-      const n = new Date(e.nextAttempt).getTime();
-      if (!nextDueAt || n < new Date(nextDueAt).getTime()) {
-        nextDueAt = e.nextAttempt;
-      }
-    }
+    // Persist + count under the queue-state mutex so this update is atomic with
+    // respect to retryFailedEvents()'s final recompute (mutex before file lock).
+    await withQueueState(async () => {
+      await batchAppendEvents(events);
+      const nowMs = Date.now();
+      for (const e of events) recordQueuedEvent(e, nowMs);
+    });
 
     batch.forEach((i) => i.resolve());
   } catch (err) {
@@ -358,9 +512,16 @@ export async function retryFailedEvents(): Promise<void> {
     // Check size/existence before rename to avoid empty file churn
     const stats = await fs.stat(failedLog).catch(() => null);
     if (!stats || stats.size === 0) {
-      failedCount = 0;
-      retryableNowCount = 0;
-      nextDueAt = null;
+      // Release the file lock BEFORE taking the mutex (lock ordering), then
+      // recompute authoritatively under the mutex. This serializes the reset
+      // with the write path and re-reads the queue, so an event written between
+      // the stat above and here is not clobbered to zero.
+      await release();
+      release = null;
+      await withQueueState(async () => {
+        const scan = await scanQueueSnapshot(Date.now());
+        if (scan) applyQueueScan(scan);
+      });
       return;
     }
 
@@ -412,6 +573,9 @@ export async function retryFailedEvents(): Promise<void> {
               const result = await deliverToChronikAgentLedger(entry.event.payload);
 
               if (result.status === 'delivered') {
+                lastCriticalDeliveredAt = new Date().toISOString();
+                // last_error is NOT cleared here: other critical events may remain
+                // queued. The final recompute below derives it from remainingEvents.
                 logger.info(
                   { type: entry.event.type, label: 'Chronik agent.ledger' },
                   '[Retry] Successfully forwarded event to Chronik agent.ledger',
@@ -442,6 +606,7 @@ export async function retryFailedEvents(): Promise<void> {
               entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
               entry.error = result.error ?? result.status;
               lastError = entry.error;
+              // lastCriticalError is derived from remainingEvents in the final recompute.
 
               logger.warn(
                 { error: entry.error, retryCount: entry.retryCount },
@@ -563,30 +728,26 @@ export async function retryFailedEvents(): Promise<void> {
       await Promise.all(activePromises);
     }
 
-    // Batch write remaining events first (crash safety)
-    if (remainingEvents.length > 0) {
-      await batchAppendEvents(remainingEvents);
-    }
+    // Persist remaining events and recompute metrics under the queue-state mutex.
+    // The file lock was released at step 4, so events queued during delivery are
+    // already in failedLog; recomputing from that live file (not just
+    // remainingEvents) means those concurrent writes are NOT lost. The mutex
+    // makes the append + rescan + apply atomic vs processWriteQueue's counting.
+    // (Mutex acquired before the file lock inside batchAppendEvents.)
+    await withQueueState(async () => {
+      // Batch write remaining events first (crash safety)
+      if (remainingEvents.length > 0) {
+        await batchAppendEvents(remainingEvents);
+      }
 
-    // THEN cleanup processing file
-    await fs.unlink(processingFile);
+      // THEN cleanup processing file
+      await fs.unlink(processingFile!);
 
-    // Reset global metrics based on remaining events
-    let minNext = Infinity;
-    let rNow = 0;
-    const nowAfter = Date.now();
-
-    for (const e of remainingEvents) {
-       const n = new Date(e.nextAttempt).getTime();
-       if (!isNaN(n)) {
-          if (n < minNext) minNext = n;
-          if (n <= nowAfter) rNow++;
-       }
-    }
-
-    failedCount = remainingEvents.length;
-    retryableNowCount = rNow;
-    nextDueAt = minNext === Infinity ? null : new Date(minNext).toISOString();
+      // Authoritative recompute from a locked snapshot of the live queue file
+      // (remaining + any events persisted concurrently during this retry run).
+      const scan = await scanQueueSnapshot(Date.now());
+      if (scan) applyQueueScan(scan);
+    });
 
   } catch (err) {
     logger.error({ err }, '[Reliability] Error processing failed events');
@@ -636,4 +797,82 @@ export function getDeliveryMetrics(pendingCount: number): PlexerDeliveryReport {
 
 export function getNextDueAt(): string | null {
   return nextDueAt;
+}
+
+export type CriticalSinkStatus = 'ready' | 'degraded' | 'unconfigured';
+
+export interface CriticalSinkReadiness {
+  /**
+   * ready: sink configured and no operational events waiting for it.
+   * degraded: sink configured but agent.ledger events are queued (undelivered).
+   * unconfigured: no CHRONIK_URL, so the critical sink is not wired.
+   */
+  status: CriticalSinkStatus;
+  critical_sink: string;
+  /**
+   * How `status` is derived. `queue_state` = inferred from Plexer's local
+   * delivery queue, NOT from a live call to Chronik. This distinction matters:
+   * `ready` means "no agent.ledger backlog buffered", not "Chronik is reachable".
+   */
+  status_basis: 'queue_state';
+  /** Whether Plexer actively probed Chronik to derive `status`. Always false today. */
+  active_probe: boolean;
+  configured: boolean;
+  queued: number;
+  /** Count of due critical entries as of the last queue scan (snapshot, may lag). */
+  retryable_now: number;
+  next_due_at: string | null;
+  /**
+   * Live-computed: whether `next_due_at` is already in the past. Unlike
+   * `retryable_now` (a scan snapshot), this stays accurate between retry runs.
+   */
+  due_now: boolean;
+  last_error: string | null;
+  /** Process-local: reset on restart, not reconstructed from persistent history. */
+  last_delivered_at: string | null;
+}
+
+/**
+ * Internal diagnostic for the critical Chronik agent.ledger sink.
+ *
+ * Derived purely from local queue state (no active Chronik probe). This is
+ * Plexer's own observability surface, NOT the vendored plexer.delivery.report.v1
+ * contract, and NOT a producer gate: a degraded or unconfigured sink does not
+ * mean producers should stop — Plexer keeps buffering operational events for
+ * retry (relay degrades without changing task truth). It is likewise NOT a
+ * Kubernetes/load-balancer readinessProbe: pulling Plexer out of rotation while
+ * it is correctly buffering would defeat the queue.
+ *
+ * `configured` intentionally tracks only CHRONIK_URL: the sink is "wired" once a
+ * URL exists. A missing CHRONIK_TOKEN is an auth detail that surfaces as
+ * `degraded` (401 -> queued), not as `unconfigured`.
+ */
+export function getCriticalSinkReadiness(): CriticalSinkReadiness {
+  const configured = !!config.chronikUrl;
+  let status: CriticalSinkStatus;
+  if (!configured) {
+    status = 'unconfigured';
+  } else if (criticalQueuedCount > 0) {
+    status = 'degraded';
+  } else {
+    status = 'ready';
+  }
+
+  const nowMs = Date.now();
+  const dueAtMs = criticalNextDueAt === null ? NaN : new Date(criticalNextDueAt).getTime();
+  const dueNow = Number.isFinite(dueAtMs) && dueAtMs <= nowMs;
+
+  return {
+    status,
+    critical_sink: 'chronik.agent.ledger',
+    status_basis: 'queue_state',
+    active_probe: false,
+    configured,
+    queued: criticalQueuedCount,
+    retryable_now: criticalRetryableNowCount,
+    next_due_at: criticalNextDueAt,
+    due_now: dueNow,
+    last_error: lastCriticalError,
+    last_delivered_at: lastCriticalDeliveredAt,
+  };
 }
