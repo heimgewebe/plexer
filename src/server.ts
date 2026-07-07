@@ -295,6 +295,14 @@ export function createServer(): Express {
     res.status(httpStatus).json(readiness);
   });
 
+  // Canonical dashboard endpoint: same diagnostic payload as /readiness but
+  // ALWAYS HTTP 200. This is the safe endpoint for standard monitoring
+  // (Uptime Kuma, systemd watchdog, Leitstand) that must not be tricked into
+  // traffic-gating by /readiness's 503. Read `status` from the body instead.
+  app.get('/diagnostics/critical-sink', (req: Request, res: Response) => {
+    res.status(200).json(getCriticalSinkReadiness());
+  });
+
   app.get('/status', (req: Request, res: Response) => {
     const report = getDeliveryMetrics(getPendingRequestCount());
 

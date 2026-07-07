@@ -243,6 +243,31 @@ describe('Critical-sink readiness (real fs)', () => {
       expect(r.last_error).toBe('persistent');
     });
 
+    // Early retry reset path (empty/no-processing) raced against a new write:
+    // the reset must not clobber the concurrently-queued critical event.
+    it('empty-reset path does not clobber a concurrent critical write', async () => {
+      await seedQueue([]);
+      await initDelivery();
+      expect(getCriticalSinkReadiness().status).toBe('ready');
+
+      // Race the empty-queue retry (early reset path) against a producer write.
+      // The saved event is future-dated (~30s), so it is never delivered here;
+      // whichever path runs, it must survive as a queued critical event.
+      await Promise.all([
+        retryFailedEvents(),
+        (async () => {
+          await saveFailedChronikAgentLedgerEvent({ kind: 'agent.run.blocked' }, 'raced with empty reset');
+          await flushFailedWrites();
+        })(),
+      ]);
+
+      const r = getCriticalSinkReadiness();
+      expect(r.queued).toBe(1);
+      expect(r.status).toBe('degraded');
+      expect(r.last_error).toBe('raced with empty reset');
+      expect(getDeliveryMetrics(0).counts.failed).toBe(1);
+    });
+
     // The core invariant: a retry run must not drop metrics/state for events
     // that were persisted concurrently while it awaited delivery.
     it('does not lose a critical event queued DURING an in-flight retry', async () => {
@@ -347,6 +372,17 @@ describe('Critical-sink readiness (real fs)', () => {
       const res = await request(app).get('/readiness');
       expect(res.status).toBe(503);
       expect(res.body.status).toBe('unconfigured');
+    });
+
+    it('GET /diagnostics/critical-sink returns 200 even when degraded', async () => {
+      await seedQueue([criticalEntry({ nextAttempt: past(), error: 'chronik down' })]);
+      await initDelivery();
+
+      const res = await request(app).get('/diagnostics/critical-sink');
+      expect(res.status).toBe(200); // canonical dashboard endpoint never 503s
+      expect(res.body.status).toBe('degraded');
+      expect(res.body.critical_sink).toBe('chronik.agent.ledger');
+      expect(res.body.last_error).toBe('chronik down');
     });
   });
 });
