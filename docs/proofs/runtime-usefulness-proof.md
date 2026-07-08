@@ -42,6 +42,7 @@ Environment:
 | `CHRONIK_REPO` | `/home/alex/repos/chronik` | Local Chronik checkout used for the ephemeral proof. |
 | `PLEXER_PROOF_RUNNER` | `docker` | `docker` uses `node:20.19.0-alpine`; `host` uses local Node/pnpm. |
 | `PLEXER_PROOF_RECEIPT` | `data/proofs/runtime-usefulness.receipt.json` | Receipt output path. `data/` is ignored. |
+| `PLEXER_PROOF_PLEXER_STARTUP_TIMEOUT_SEC` | `240` | Startup timeout for the Plexer process; Docker may need time for Corepack, pnpm install, and TypeScript build on cold caches. |
 
 ## What it proves
 

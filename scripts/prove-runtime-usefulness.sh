@@ -9,8 +9,9 @@ Proves the narrow Plexer usefulness path:
   Grabowski-shaped agent.run.completed event -> Plexer /v1/events -> Chronik agent.ledger -> read-back.
 
 Environment:
-  CHRONIK_REPO          Path to a local Chronik checkout (default: /home/alex/repos/chronik)
-  PLEXER_PROOF_RUNNER  docker or host (default: docker)
+  CHRONIK_REPO                             Path to a local Chronik checkout (default: /home/alex/repos/chronik)
+  PLEXER_PROOF_RUNNER                     docker or host (default: docker)
+  PLEXER_PROOF_PLEXER_STARTUP_TIMEOUT_SEC Plexer startup timeout in seconds (default: 240)
 USAGE
 }
 
@@ -19,6 +20,8 @@ CHRONIK_REPO="${CHRONIK_REPO:-/home/alex/repos/chronik}"
 RUNNER="${PLEXER_PROOF_RUNNER:-docker}"
 KEEP_WORKDIR="${PLEXER_PROOF_KEEP_WORKDIR:-0}"
 RECEIPT_PATH="${PLEXER_PROOF_RECEIPT:-$ROOT/data/proofs/runtime-usefulness.receipt.json}"
+CHRONIK_STARTUP_TIMEOUT_SEC="${PLEXER_PROOF_CHRONIK_STARTUP_TIMEOUT_SEC:-30}"
+PLEXER_STARTUP_TIMEOUT_SEC="${PLEXER_PROOF_PLEXER_STARTUP_TIMEOUT_SEC:-240}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,7 +80,15 @@ wait_http() {
   local url="$1"
   local label="$2"
   local token="${3:-}"
-  for _ in $(seq 1 100); do
+  local timeout_seconds="${4:-30}"
+  local watched_pid="${5:-}"
+  local deadline=$((SECONDS + timeout_seconds))
+
+  while (( SECONDS < deadline )); do
+    if [[ -n "$watched_pid" ]] && ! kill -0 "$watched_pid" >/dev/null 2>&1; then
+      echo "ERROR: $label process exited before $url became healthy" >&2
+      return 1
+    fi
     if [[ -n "$token" ]]; then
       if curl -fsS --max-time 1 -H "X-Auth: $token" "$url" >/dev/null 2>&1; then
         return 0
@@ -87,9 +98,9 @@ wait_http() {
         return 0
       fi
     fi
-    sleep 0.1
+    sleep 0.5
   done
-  echo "ERROR: timed out waiting for $label at $url" >&2
+  echo "ERROR: timed out waiting ${timeout_seconds}s for $label at $url" >&2
   return 1
 }
 
@@ -150,7 +161,7 @@ mkdir -p "$CHRONIK_DATA_DIR" "$PLEXER_DATA_DIR" "$(dirname "$RECEIPT_PATH")"
     .venv/bin/uvicorn app:app --host 127.0.0.1 --port "$CHRONIK_PORT"
 ) >"$WORKDIR/chronik.log" 2>&1 &
 chronik_pid=$!
-wait_http "$CHRONIK_URL/health" "Chronik" "$TOKEN"
+wait_http "$CHRONIK_URL/health" "Chronik" "$TOKEN" "$CHRONIK_STARTUP_TIMEOUT_SEC" "$chronik_pid"
 
 if [[ "$RUNNER" == "docker" ]]; then
   (
@@ -183,7 +194,7 @@ else
   ) >"$WORKDIR/plexer.log" 2>&1 &
   plexer_pid=$!
 fi
-wait_http "$PLEXER_URL/health" "Plexer"
+wait_http "$PLEXER_URL/health" "Plexer" "" "$PLEXER_STARTUP_TIMEOUT_SEC" "$plexer_pid"
 
 HEAD_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD)"
