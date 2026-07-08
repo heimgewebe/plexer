@@ -23,6 +23,8 @@ Plexer wird in Richtung **Event Gateway und Delivery Relay** neu zugeschnitten. 
 
 Details: [`docs/architecture/plexer-v2-gateway.md`](docs/architecture/plexer-v2-gateway.md), [`docs/migration/plexer-v2-execution-plan.md`](docs/migration/plexer-v2-execution-plan.md) und [`docs/proofs/agent-run-proof-of-use.md`](docs/proofs/agent-run-proof-of-use.md).
 
+Der wiederholbare Runtime-Nutzennachweis liegt in [`docs/proofs/runtime-usefulness-proof.md`](docs/proofs/runtime-usefulness-proof.md) und kann mit `pnpm run proof:runtime-usefulness` ausgeführt werden. Er prüft bewusst nur den engen Pfad `agent.run.* -> Plexer -> Chronik agent.ledger -> Read-back`; er ist kein Producer-Gate und keine Erweiterungsfreigabe für neue Eventfamilien.
+
 ## Scope
 
 Plexer kümmert sich ausschließlich um **Eventtransport**.
