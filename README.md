@@ -45,14 +45,17 @@ Plexer tut **nicht**:
 - als Bot oder Reviewer agieren
 - Chat- oder Dialogflüsse steuern
 
-## Organismus-Kontext
+## Systemkontext
 
-Dieses Repository ist Teil des **Heimgewebe-Organismus**.
+Der aktuelle Zweck, Lifecycle-Status und die Beziehungen dieses Repositories zu anderen
+Heimgewebe-Systemen werden im [Systemkatalog](https://github.com/heimgewebe/systemkatalog) geführt. Die
+[gerenderte Systemübersicht](https://github.com/heimgewebe/systemkatalog/blob/main/rendered/system-catalog.md)
+ist die lesbare Gesamtsicht; die
+[maschinenlesbare Inventur](https://github.com/heimgewebe/systemkatalog/blob/main/registry/ecosystem/nodes.json)
+ist die Quelle für Automatisierung.
 
-Die übergeordnete Architektur, Achsen, Rollen und Contracts sind zentral beschrieben im  
-👉 [`metarepo/docs/system/heimgewebe-organismus.md`](https://github.com/heimgewebe/metarepo/blob/main/docs/heimgewebe-organismus.md)  
-sowie im Zielbild  
-👉 [`metarepo/docs/heimgewebe-zielbild.md`](https://github.com/heimgewebe/metarepo/blob/main/docs/heimgewebe-zielbild.md).
+Repositoryeigene Betriebs-, Daten- und Implementierungswahrheit bleibt in diesem Repository.
+Gemeinsame Contracts bleiben bei ihrer jeweiligen Primärquelle.
 
 ## Tooling
 
