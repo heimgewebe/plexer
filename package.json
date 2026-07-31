@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "plexer application",
   "main": "dist/index.js",
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": ">=20"
   },
