@@ -1,4 +1,5 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { randomUUID } from 'crypto';
 import { config } from './config';
 import { PlexerEvent } from './types';
@@ -24,6 +25,7 @@ import {
 import { deliverToChronikAgentLedger } from './chronik';
 import {
   hasValidBearerAuthorization,
+  BoundedIngressRateLimitStore,
   IngressAdmissionController,
   IngressRejection,
 } from './ingress';
@@ -280,9 +282,26 @@ export function createServer(): Express {
     });
   };
 
-  // Authenticate and rate-limit before parsing JSON so unauthenticated callers
-  // cannot consume body-parser work. X-Auth is intentionally not accepted: all
-  // audited Plexer producers either already use Bearer or must migrate to it.
+  const ingressRateLimiter = rateLimit({
+    windowMs: config.ingressRateWindowMs ?? 60_000,
+    limit: config.ingressPerClientRateLimit ?? 120,
+    store: new BoundedIngressRateLimitStore(ingressAdmission),
+    standardHeaders: false,
+    legacyHeaders: false,
+    passOnStoreError: false,
+    handler: (_req, res) => {
+      rejectIngress(res, {
+        accepted: false,
+        reason: 'rate_limit',
+        retryAfterSeconds: ingressAdmission.retryAfterSeconds(),
+      });
+    },
+  });
+
+  // Rate-limit and authenticate before parsing JSON so unauthenticated callers
+  // cannot consume body-parser work without bound. X-Auth is intentionally not
+  // accepted: audited Plexer producers use Bearer or must migrate to it.
+  app.use(['/events', '/v1/events'], ingressRateLimiter);
   app.use(['/events', '/v1/events'], (req: Request, res: Response, next: NextFunction) => {
     if (!config.plexerToken) {
       return res.status(503).json({
@@ -300,9 +319,9 @@ export function createServer(): Express {
       });
     }
 
-    const clientKey = req.socket.remoteAddress || 'unknown';
-    const admission = ingressAdmission.admitRate(clientKey);
-    if (!admission.accepted) return rejectIngress(res, admission);
+    const rateLimitKey = (req as Request & { rateLimit?: { key?: string } })
+      .rateLimit?.key;
+    const clientKey = rateLimitKey || req.socket.remoteAddress || 'unknown';
     res.locals.ingressClientKey = clientKey;
     next();
   });

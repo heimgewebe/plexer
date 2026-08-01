@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from 'crypto';
+import type { IncrementResponse, Store } from 'express-rate-limit';
 
 export interface IngressLimits {
   windowMs: number;
@@ -62,7 +63,7 @@ export class IngressAdmissionController {
     return Math.floor(nowMs / this.limits.windowMs);
   }
 
-  private retryAfterSeconds(nowMs: number): number {
+  retryAfterSeconds(nowMs = Date.now()): number {
     const nextBoundary = (this.windowId(nowMs) + 1) * this.limits.windowMs;
     return Math.max(1, Math.ceil((nextBoundary - nowMs) / 1_000));
   }
@@ -147,5 +148,64 @@ export class IngressAdmissionController {
 
   getClientStateCount(): number {
     return this.clients.size;
+  }
+
+  incrementForRateLimiter(clientKey: string, nowMs = Date.now()): IncrementResponse {
+    const admission = this.admitRate(clientKey, nowMs);
+    const resetTime = new Date((this.windowId(nowMs) + 1) * this.limits.windowMs);
+    if (!admission.accepted) {
+      return {
+        totalHits: this.limits.perClientRateLimit + 1,
+        resetTime,
+      };
+    }
+    return {
+      totalHits: this.clients.get(clientKey)?.requests ?? 1,
+      resetTime,
+    };
+  }
+
+  decrementRate(clientKey: string): void {
+    const client = this.clients.get(clientKey);
+    if (!client || client.requests === 0) return;
+    client.requests--;
+    this.globalRequests = Math.max(0, this.globalRequests - 1);
+  }
+
+  resetClient(clientKey: string): void {
+    const client = this.clients.get(clientKey);
+    if (client?.windowId === this.globalWindowId) {
+      this.globalRequests = Math.max(0, this.globalRequests - client.requests);
+    }
+    this.clients.delete(clientKey);
+  }
+
+  resetAll(): void {
+    this.clients.clear();
+    this.globalRequests = 0;
+    this.globalWindowId = -1;
+  }
+}
+
+/** Adapter recognized by express-rate-limit/CodeQL while retaining hard map bounds. */
+export class BoundedIngressRateLimitStore implements Store {
+  readonly localKeys = true;
+
+  constructor(private readonly controller: IngressAdmissionController) {}
+
+  increment(key: string): IncrementResponse {
+    return this.controller.incrementForRateLimiter(key);
+  }
+
+  decrement(key: string): void {
+    this.controller.decrementRate(key);
+  }
+
+  resetKey(key: string): void {
+    this.controller.resetClient(key);
+  }
+
+  resetAll(): void {
+    this.controller.resetAll();
   }
 }

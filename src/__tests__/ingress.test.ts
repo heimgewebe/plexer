@@ -39,6 +39,7 @@ import { createServer } from '../server';
 import { deliverToChronikAgentLedger } from '../chronik';
 import { logger } from '../logger';
 import {
+  BoundedIngressRateLimitStore,
   hasValidBearerAuthorization,
   IngressAdmissionController,
 } from '../ingress';
@@ -194,5 +195,19 @@ describe('Ingress admission controller bounds', () => {
     expect(hasValidBearerAuthorization('Bearer token extra', 'token')).toBe(false);
     expect(hasValidBearerAuthorization('token', 'token')).toBe(false);
     expect(hasValidBearerAuthorization(undefined, 'token')).toBe(false);
+  });
+
+  it('adapts global rejection to the recognized rate-limit store contract', () => {
+    const controller = new IngressAdmissionController({
+      ...limits,
+      perClientRateLimit: 5,
+      globalRateLimit: 2,
+      maxClients: 2,
+    });
+    const store = new BoundedIngressRateLimitStore(controller);
+    expect(store.increment('client-a').totalHits).toBe(1);
+    expect(store.increment('client-b').totalHits).toBe(1);
+    // Global capacity is exhausted although client-a remains below its own 5.
+    expect(store.increment('client-a').totalHits).toBe(6);
   });
 });
