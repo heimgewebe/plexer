@@ -477,6 +477,34 @@ export function createServer(): Express {
   return app;
 }
 
+async function handleForwardFailure(
+  context: Record<string, unknown>,
+  errorMessage: string,
+  type: string,
+  key: string,
+  source: string,
+  payload: unknown,
+): Promise<void> {
+  // Reliability Policy:
+  // - Heimgeist: Critical push -> Queue on failure
+  // - Others (Chronik, Leitstand, hausKI): Best-effort notification -> Log warn on failure
+  // - BEST_EFFORT_EVENTS override: Always warn, never queue
+  const isCriticalConsumer = key === 'heimgeist';
+  const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
+
+  if (isBestEffortEvent || !isCriticalConsumer) {
+    context.log_kind = 'best_effort_forward_failed';
+    logger.warn(context, `[Best-Effort] ${errorMessage}`);
+  } else {
+    await saveFailedEvent(
+      { type, source, payload },
+      key,
+      errorMessage,
+    ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
+    logger.error(context, errorMessage);
+  }
+}
+
 export async function processEvent(event: PlexerEvent): Promise<void> {
   const { type, source, payload } = event;
 
@@ -585,28 +613,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
               type,
             };
 
-            // Reliability Policy:
-            // - Heimgeist: Critical push -> Queue on failure
-            // - Others (Chronik, Leitstand, hausKI): Best-effort notification -> Log warn on failure
-            // - BEST_EFFORT_EVENTS override: Always warn, never queue
-            const isCriticalConsumer = key === 'heimgeist';
-            const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
-
-            if (isBestEffortEvent || !isCriticalConsumer) {
-              context.log_kind = 'best_effort_forward_failed';
-              logger.warn(context, `[Best-Effort] ${errorMessage}`);
-            } else {
-              await saveFailedEvent(
-                {
-                  type,
-                  source,
-                  payload,
-                },
-                key,
-                errorMessage,
-              ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
-              logger.error(context, errorMessage);
-            }
+            await handleForwardFailure(context, errorMessage, type, key, source, payload);
           }
         })
         .catch(async (error) => {
@@ -618,25 +625,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
             error: errorDetail,
           };
 
-          // Reliability Policy (same as above)
-          const isCriticalConsumer = key === 'heimgeist';
-          const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
-
-          if (isBestEffortEvent || !isCriticalConsumer) {
-            context.log_kind = 'best_effort_forward_failed';
-            logger.warn(context, `[Best-Effort] ${errorMessage}`);
-          } else {
-            await saveFailedEvent(
-              {
-                type,
-                source,
-                payload,
-              },
-              key,
-              errorMessage,
-            ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
-            logger.error(context, errorMessage);
-          }
+          await handleForwardFailure(context, errorMessage, type, key, source, payload);
         })
         .finally(() => {
           pendingFetches.delete(fetchPromise);
