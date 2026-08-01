@@ -30,6 +30,63 @@ describe('config', () => {
     });
   });
 
+  describe('Listener and ingress security', () => {
+    it('defaults to the IPv4 loopback listener', () => {
+      delete process.env.HOST;
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.host).toBe('127.0.0.1');
+      });
+    });
+
+    it('refuses a wide bind without explicit opt-in', () => {
+      process.env.HOST = '0.0.0.0';
+      process.env.PLEXER_TOKEN = 'configured-token';
+      delete process.env.PLEXER_ALLOW_NON_LOOPBACK;
+      expect(() => {
+        jest.isolateModules(() => require('../config'));
+      }).toThrow('Refusing non-loopback HOST without PLEXER_ALLOW_NON_LOOPBACK=true');
+    });
+
+    it('refuses a wide bind without active ingress auth', () => {
+      process.env.HOST = '::';
+      process.env.PLEXER_ALLOW_NON_LOOPBACK = 'true';
+      delete process.env.PLEXER_TOKEN;
+      expect(() => {
+        jest.isolateModules(() => require('../config'));
+      }).toThrow('Refusing non-loopback HOST without PLEXER_TOKEN');
+    });
+
+    it('allows a wide bind only with validated opt-in and a token', () => {
+      process.env.HOST = '0.0.0.0';
+      process.env.PLEXER_ALLOW_NON_LOOPBACK = 'true';
+      process.env.PLEXER_TOKEN = 'configured-token';
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config.host).toBe('0.0.0.0');
+        expect(config.allowNonLoopback).toBe(true);
+        expect(config.plexerToken).toBe('configured-token');
+      });
+    });
+
+    it('rejects an invalid non-loopback opt-in value', () => {
+      process.env.PLEXER_ALLOW_NON_LOOPBACK = 'yes';
+      expect(() => {
+        jest.isolateModules(() => require('../config'));
+      }).toThrow('Invalid PLEXER_ALLOW_NON_LOOPBACK');
+    });
+
+    it('recognizes the complete IPv4 loopback range and IPv6 loopback', () => {
+      jest.isolateModules(() => {
+        const { isLoopbackHost } = require('../config');
+        expect(isLoopbackHost('127.42.0.9')).toBe(true);
+        expect(isLoopbackHost('::1')).toBe(true);
+        expect(isLoopbackHost('0.0.0.0')).toBe(false);
+        expect(isLoopbackHost('192.168.1.2')).toBe(false);
+      });
+    });
+  });
+
   it('rejects non-numeric ports', () => {
     process.env.PORT = '3000abc';
 
@@ -338,6 +395,50 @@ describe('config', () => {
           require('../config');
         });
       }).toThrow(/^Invalid RETRY_BATCH_SIZE environment variable/);
+    });
+  });
+
+  describe('Ingress and retention limits', () => {
+    it('loads explicit positive limits', () => {
+      process.env.PLEXER_INGRESS_RATE_WINDOW_MS = '1000';
+      process.env.PLEXER_INGRESS_PER_CLIENT_RATE_LIMIT = '5';
+      process.env.PLEXER_INGRESS_GLOBAL_RATE_LIMIT = '10';
+      process.env.PLEXER_INGRESS_PER_CLIENT_MAX_IN_FLIGHT = '2';
+      process.env.PLEXER_INGRESS_GLOBAL_MAX_IN_FLIGHT = '4';
+      process.env.PLEXER_INGRESS_MAX_CLIENTS = '32';
+      process.env.FAILED_FORWARDS_MAX_BYTES = '4096';
+      process.env.FAILED_FORWARDS_MAX_ENTRIES = '12';
+      process.env.FAILED_FORWARDS_MAX_AGE_MS = '60000';
+
+      jest.isolateModules(() => {
+        const { config } = require('../config');
+        expect(config).toMatchObject({
+          ingressRateWindowMs: 1000,
+          ingressPerClientRateLimit: 5,
+          ingressGlobalRateLimit: 10,
+          ingressPerClientMaxInFlight: 2,
+          ingressGlobalMaxInFlight: 4,
+          ingressMaxClients: 32,
+          failedForwardsMaxBytes: 4096,
+          failedForwardsMaxEntries: 12,
+          failedForwardsMaxAgeMs: 60000,
+        });
+      });
+    });
+
+    it('rejects a per-client rate above the global rate', () => {
+      process.env.PLEXER_INGRESS_PER_CLIENT_RATE_LIMIT = '11';
+      process.env.PLEXER_INGRESS_GLOBAL_RATE_LIMIT = '10';
+      expect(() => {
+        jest.isolateModules(() => require('../config'));
+      }).toThrow('PLEXER_INGRESS_PER_CLIENT_RATE_LIMIT must not exceed');
+    });
+
+    it('rejects unsafe-integer retention limits', () => {
+      process.env.FAILED_FORWARDS_MAX_BYTES = '9007199254740992';
+      expect(() => {
+        jest.isolateModules(() => require('../config'));
+      }).toThrow('Invalid FAILED_FORWARDS_MAX_BYTES');
     });
   });
 });

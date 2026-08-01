@@ -8,6 +8,7 @@ jest.mock('../config', () => ({
     port: 3000,
     host: '0.0.0.0',
     environment: 'test',
+    plexerToken: 'test-plexer-token',
     heimgeistUrl: 'http://heimgeist.local',
     dataDir: 'data',
   },
@@ -16,7 +17,7 @@ jest.mock('../config', () => ({
 // Mock delivery to avoid side effects
 jest.mock('../delivery', () => ({
   __esModule: true,
-  saveFailedEvent: jest.fn().mockResolvedValue(undefined),
+  saveFailedEvent: jest.fn().mockResolvedValue({ status: 'persisted' }),
   getDeliveryMetrics: jest.fn(),
   retryFailedEvents: jest.fn().mockResolvedValue(undefined),
   validateEventEnvelope: jest.fn().mockReturnValue(true),
@@ -39,6 +40,7 @@ describe('Error Handling', () => {
   it('should return 400 Bad Request for invalid JSON', async () => {
     const response = await request(app)
       .post('/events')
+      .set('Authorization', 'Bearer test-plexer-token')
       .set('Content-Type', 'application/json')
       .send('{ "invalid": json, }');
 
@@ -59,6 +61,7 @@ describe('Error Handling', () => {
 
     const response = await request(app)
       .post('/events')
+      .set('Authorization', 'Bearer test-plexer-token')
       .set('Content-Type', 'application/json')
       .send({
         type: 'test.event',

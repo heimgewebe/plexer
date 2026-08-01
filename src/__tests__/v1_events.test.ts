@@ -7,9 +7,16 @@ jest.mock('../logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 jest.mock('../chronik', () => ({ deliverToChronikAgentLedger: jest.fn() }));
+jest.mock('../config', () => ({
+  config: {
+    environment: 'test',
+    plexerToken: 'test-plexer-token',
+    dataDir: 'data',
+  },
+}));
 jest.mock('../delivery', () => ({
-  saveFailedEvent: jest.fn().mockResolvedValue(undefined),
-  saveFailedChronikAgentLedgerEvent: jest.fn().mockResolvedValue(undefined),
+  saveFailedEvent: jest.fn().mockResolvedValue({ status: 'persisted' }),
+  saveFailedChronikAgentLedgerEvent: jest.fn().mockResolvedValue({ status: 'persisted' }),
   getDeliveryMetrics: jest.fn(),
   validateDeliveryReport: jest.fn(),
   validateEventEnvelope: jest.fn(),
@@ -25,7 +32,7 @@ describe('POST /v1/events', () => {
   it('accepts allowed events', async () => {
     deliverMock.mockResolvedValue({ status: 'delivered', retryable: false, statusCode: 202 });
     const event = { kind: 'agent.run.completed', data: { result: 'completed' } };
-    const response = await request(app).post('/v1/events').send(event);
+    const response = await request(app).post('/v1/events').set('Authorization', 'Bearer test-plexer-token').send(event);
     expect(response.status).toBe(202);
     expect(response.body).toEqual({ status: 'accepted' });
     expect(deliverMock).toHaveBeenCalledWith(event);
@@ -36,6 +43,7 @@ describe('POST /v1/events', () => {
     const body = `{"kind":"agent.run.completed","data":{"summary":"ok"},"padding":"${' '.repeat(9000)}"}`;
     const response = await request(app)
       .post('/v1/events')
+      .set('Authorization', 'Bearer test-plexer-token')
       .set('Content-Type', 'application/json')
       .send(body);
     expect(response.status).toBe(413);
@@ -46,6 +54,7 @@ describe('POST /v1/events', () => {
     const body = `{"kind":"agent.run.completed","data":{"summary":"ok"},"padding":"${' '.repeat(9000)}"}`;
     const response = await request(app)
       .post('/v1/events/')
+      .set('Authorization', 'Bearer test-plexer-token')
       .set('Content-Type', 'application/json')
       .send(body);
     expect(response.status).toBe(413);
@@ -53,25 +62,25 @@ describe('POST /v1/events', () => {
   });
 
   it('rejects unsupported kinds', async () => {
-    const response = await request(app).post('/v1/events').send({ kind: 'repo.review.gate.v1' });
+    const response = await request(app).post('/v1/events').set('Authorization', 'Bearer test-plexer-token').send({ kind: 'repo.review.gate.v1' });
     expect(response.status).toBe(422);
     expect(deliverMock).not.toHaveBeenCalled();
   });
 
   it('rejects unsupported top level keys', async () => {
-    const response = await request(app).post('/v1/events').send({ kind: 'agent.run.started', extra: 'x' });
+    const response = await request(app).post('/v1/events').set('Authorization', 'Bearer test-plexer-token').send({ kind: 'agent.run.started', extra: 'x' });
     expect(response.status).toBe(422);
     expect(deliverMock).not.toHaveBeenCalled();
   });
 
   it('rejects invalid reference shapes', async () => {
-    const response = await request(app).post('/v1/events').send({ kind: 'agent.run.completed', evidence_refs: [{ detail: 'x' }] });
+    const response = await request(app).post('/v1/events').set('Authorization', 'Bearer test-plexer-token').send({ kind: 'agent.run.completed', evidence_refs: [{ detail: 'x' }] });
     expect(response.status).toBe(422);
     expect(deliverMock).not.toHaveBeenCalled();
   });
 
   it('rejects invalid data values', async () => {
-    const response = await request(app).post('/v1/events').send({ kind: 'agent.run.completed', data: { summary: 123 } });
+    const response = await request(app).post('/v1/events').set('Authorization', 'Bearer test-plexer-token').send({ kind: 'agent.run.completed', data: { summary: 123 } });
     expect(response.status).toBe(422);
     expect(deliverMock).not.toHaveBeenCalled();
   });
@@ -79,7 +88,7 @@ describe('POST /v1/events', () => {
   it('queues retryable delivery failures', async () => {
     deliverMock.mockResolvedValue({ status: 'retryable_failure', retryable: true, error: 'retry' });
     const event = { kind: 'agent.run.blocked', data: { blocker_code: 'chronik_down' } };
-    const response = await request(app).post('/v1/events').send(event);
+    const response = await request(app).post('/v1/events').set('Authorization', 'Bearer test-plexer-token').send(event);
     expect(response.status).toBe(202);
     expect(response.body).toMatchObject({ status: 'queued', retryable: true });
     expect(saveMock).toHaveBeenCalledWith(event, 'retry');
@@ -88,15 +97,34 @@ describe('POST /v1/events', () => {
   it('queues temporary configuration failures', async () => {
     deliverMock.mockResolvedValue({ status: 'skipped', retryable: false, error: 'missing config' });
     const event = { kind: 'agent.run.started', data: { summary: 'started' } };
-    const response = await request(app).post('/v1/events').send(event);
+    const response = await request(app).post('/v1/events').set('Authorization', 'Bearer test-plexer-token').send(event);
     expect(response.status).toBe(202);
     expect(response.body).toMatchObject({ status: 'queued', retryable: true });
     expect(saveMock).toHaveBeenCalledWith(event, 'missing config');
   });
 
+  it('does not claim queued when failed-forward persistence rejects at quota', async () => {
+    deliverMock.mockResolvedValue({ status: 'retryable_failure', retryable: true, error: 'retry' });
+    saveMock.mockResolvedValueOnce({ status: 'rejected', reason: 'quota' });
+    const event = { kind: 'agent.run.blocked', data: { blocker_code: 'chronik_down' } };
+
+    const response = await request(app)
+      .post('/v1/events')
+      .set('Authorization', 'Bearer test-plexer-token')
+      .send(event);
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      status: 'error',
+      message: 'Failed event queue unavailable',
+      retryable: true,
+      reason: 'quota',
+    });
+  });
+
   it('maps permanent delivery failures to 502', async () => {
     deliverMock.mockResolvedValue({ status: 'permanent_failure', retryable: false, statusCode: 400 });
-    const response = await request(app).post('/v1/events').send({ kind: 'agent.run.started', data: { summary: 'started' } });
+    const response = await request(app).post('/v1/events').set('Authorization', 'Bearer test-plexer-token').send({ kind: 'agent.run.started', data: { summary: 'started' } });
     expect(response.status).toBe(502);
     expect(response.body).toMatchObject({ retryable: false });
     expect(saveMock).not.toHaveBeenCalled();

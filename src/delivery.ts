@@ -1,13 +1,5 @@
-import fs from 'fs/promises';
-import { createReadStream, createWriteStream } from 'fs';
-import { Readable } from 'stream';
-import { pipeline } from 'stream/promises';
-import readline from 'readline';
-import path from 'path';
-import { randomUUID } from 'crypto';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
-import { lock } from 'proper-lockfile';
 import { config } from './config';
 import { FailedEvent, PlexerEvent, PlexerDeliveryReport } from './types';
 import { CONSUMERS } from './consumers';
@@ -20,10 +12,14 @@ import {
   RETRY_JITTER_MAX_MS,
   RETRY_BACKOFF_BASE_MS,
   RETRY_BACKOFF_MAX_MS,
-  LOCK_RETRIES,
 } from './constants';
 // NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
 import pLimit from 'p-limit';
+import {
+  failedForwardStore,
+  QueueClaim,
+  StoredQueueLine,
+} from './failedForwardStore';
 
 let lastError: string | null = null;
 let lastRetryAt: string | null = null;
@@ -156,74 +152,28 @@ function newQueueScan(): QueueScan {
   return { lineCount: 0, retryableNow: 0, minNext: Infinity, critical: newCriticalAccumulator() };
 }
 
-// Fold a single queue file (already a stable point-in-time source, e.g. a
-// snapshot copy). NOTE: `lineCount` counts every non-empty line, including
-// unparseable ones, so failedCount == "lines in the queue file". Corrupt lines
-// are not folded into the critical/due metrics. A dedicated corrupt_lines signal
-// is a possible follow-up, out of scope for this slice.
-async function scanQueueFile(filePath: string, nowMs: number): Promise<QueueScan> {
-  const scan = newQueueScan();
-  for await (const line of readLinesSafe(filePath)) {
-    if (!line.trim()) continue;
-    scan.lineCount++;
-    let entry: FailedEvent;
-    try {
-      entry = JSON.parse(line) as FailedEvent;
-    } catch {
-      continue; // corrupt line: counted as a line, but not folded
-    }
-    const n = new Date(entry.nextAttempt).getTime();
-    if (!isNaN(n)) {
-      if (n < scan.minNext) scan.minNext = n;
-      if (n <= nowMs) scan.retryableNow++;
-    }
-    foldCriticalEntry(scan.critical, entry, nowMs);
+function foldStoredLine(scan: QueueScan, line: StoredQueueLine, nowMs: number): void {
+  if (!line.nonEmpty) return;
+  scan.lineCount++;
+  const entry = line.entry;
+  if (!entry) return;
+  const n = new Date(entry.nextAttempt).getTime();
+  if (!isNaN(n)) {
+    if (n < scan.minNext) scan.minNext = n;
+    if (n <= nowMs) scan.retryableNow++;
   }
-  return scan;
+  foldCriticalEntry(scan.critical, entry, nowMs);
 }
 
-// Authoritative recompute source used by init, the early retry reset and the
-// final retry recompute. Takes the proper-lockfile file lock, copies the live
-// queue to a point-in-time snapshot, releases the lock, then scans the snapshot.
-// The snapshot copy is guarded by proper-lockfile (incl. cross-process); the
-// resulting counters are a PROCESS-LOCAL view. Callers must hold withQueueState
-// so the apply is atomic vs this process's write/retry interleavings; a second
-// process could still mutate the file after the snapshot, leaving this process's
-// counters to lag until its next scan. Returns null (do NOT apply / do NOT
-// clobber counters) if the snapshot could not be taken.
-async function scanQueueSnapshot(nowMs: number): Promise<QueueScan | null> {
-  const dataDir = getDataDir();
-  const failedLog = getFailedLogPath();
-  const lockFile = getLockFilePath();
-  await ensureDataDir();
-  await ensureLockFile();
-
-  let snapshot: string | null = null;
-  let release;
+// Authoritative locked scan across the active file and every retry archive.
+async function scanQueueState(nowMs: number): Promise<QueueScan | null> {
+  const scan = newQueueScan();
   try {
-    release = await lock(lockFile, { retries: LOCK_RETRIES });
-    // Ensure the source exists so copyFile does not throw on a fresh queue.
-    try { await fs.access(failedLog); } catch { await fs.writeFile(failedLog, ''); }
-    const candidate = path.join(dataDir, `snapshot.${randomUUID()}.jsonl`);
-    await fs.copyFile(failedLog, candidate);
-    snapshot = candidate;
+    await failedForwardStore.scan((line) => foldStoredLine(scan, line, nowMs));
+    return scan;
   } catch (e) {
-    logger.error({ err: e }, 'Failed to snapshot queue for metrics scan');
-    return null; // keep prior counters rather than clobbering to zero
-  } finally {
-    if (release) await release();
-  }
-
-  // Explicit narrowing to string (the catch above returns on failure).
-  if (snapshot === null) return null;
-  const snapshotPath: string = snapshot;
-  try {
-    return await scanQueueFile(snapshotPath, nowMs);
-  } catch (e) {
-    logger.error({ err: e }, 'Failed to scan queue snapshot');
+    logger.error({ err: e }, 'Failed to scan failed-forward store');
     return null;
-  } finally {
-    try { await fs.unlink(snapshotPath); } catch {}
   }
 }
 
@@ -246,115 +196,24 @@ const validateFailedEvent = ajv.compile(failedEventSchema);
 export const validateDeliveryReport = ajv.compile(deliveryReportSchema);
 export const validateEventEnvelope = ajv.compile(eventEnvelopeSchema);
 
-function detach(emitter: any, event: string, listener: (...args: any[]) => void) {
-  if (typeof emitter.off === 'function') {
-    emitter.off(event, listener);
-  } else if (typeof emitter.removeListener === 'function') {
-    emitter.removeListener(event, listener);
-  }
-}
-
-async function* readLinesSafe(filePath: string): AsyncGenerator<string> {
-  const stream = createReadStream(filePath);
-  const rl = readline.createInterface({
-    input: stream,
-    crlfDelay: Infinity,
-  });
-
-  let streamErr: unknown | null = null;
-  const onErr = (e: unknown) => {
-    if (streamErr === null) streamErr = e;
-    rl.close();
-  };
-
-  stream.on('error', onErr);
-  rl.on('error', onErr);
-
-  try {
-    for await (const line of rl) {
-      yield line;
-    }
-    if (streamErr) throw streamErr;
-  } finally {
-    detach(stream, 'error', onErr);
-    detach(rl, 'error', onErr);
-    rl.close();
-    stream.destroy();
-  }
-}
-
-function getDataDir() {
-  return path.resolve(config.dataDir);
-}
-
-function getFailedLogPath() {
-  return path.join(getDataDir(), 'failed_forwards.jsonl');
-}
-
-function getLockFilePath() {
-  return path.join(getDataDir(), 'failed_forwards.lock');
-}
-
-async function ensureDataDir() {
-  try {
-    await fs.mkdir(getDataDir(), { recursive: true });
-  } catch {}
-}
-
-async function ensureLockFile() {
-  try {
-    await fs.access(getLockFilePath());
-  } catch {
-    await fs.writeFile(getLockFilePath(), '');
-  }
-}
-
 // Initial startup: crash recovery and metrics scan
 export async function initDelivery(): Promise<void> {
   try {
-    await ensureDataDir();
-    await ensureLockFile();
-
-    const dataDir = getDataDir();
-    const failedLog = getFailedLogPath();
-    const lockFile = getLockFilePath();
-
-    // 1. Crash Recovery: Check for orphaned processing files
-    const files = await fs.readdir(dataDir);
-    const processingFiles = files.filter((f) => f.startsWith('processing.') && f.endsWith('.jsonl'));
-
-    if (processingFiles.length > 0) {
-      logger.info(`Found ${processingFiles.length} orphaned processing files. Recovering...`);
-
-      let release;
-      try {
-        release = await lock(lockFile, { retries: LOCK_RETRIES });
-        for (const file of processingFiles) {
-          const filePath = path.join(dataDir, file);
-          try {
-            // Crash-recovery should be byte-preserving: append orphaned JSONL as-is.
-            // We intentionally stream Buffers (no encoding) to avoid re-encoding/transcoding.
-            await pipeline(
-              createReadStream(filePath),
-              createWriteStream(failedLog, { flags: 'a' })
-            );
-            await fs.unlink(filePath);
-          } catch (e) {
-            logger.error({ err: e, file }, `Failed to recover orphaned file ${file}`);
-          }
-        }
-      } catch (e) {
-        logger.error({ err: e }, 'Failed to lock during recovery');
-      } finally {
-        if (release) await release();
-      }
+    const retention = await failedForwardStore.initialize();
+    if (
+      retention.corruptDropped > 0 ||
+      retention.expiredDropped > 0 ||
+      retention.quotaDropped > 0
+    ) {
+      logger.warn({
+        corrupt_dropped: retention.corruptDropped,
+        expired_dropped: retention.expiredDropped,
+        quota_dropped: retention.quotaDropped,
+      }, '[Reliability] Normalized failed-forward retention on startup');
     }
 
-    // 2. Metrics Scan — authoritative snapshot scan under the queue-state mutex,
-    // so a concurrent save cannot land between the point-in-time copy and the
-    // counter apply. Mutex is acquired before the file lock (inside the helper).
     await withQueueState(async () => {
-      const scan = await scanQueueSnapshot(Date.now());
+      const scan = await scanQueueState(Date.now());
       if (scan) applyQueueScan(scan);
     });
   } catch (err) {
@@ -362,12 +221,19 @@ export async function initDelivery(): Promise<void> {
   }
 }
 
+export type FailedEventSaveResult =
+  | { status: 'persisted' }
+  | { status: 'rejected'; reason: 'invalid' | 'quota' | 'io' };
+
 interface QueueItem {
   entry: FailedEvent;
-  resolve: () => void;
+  bytes: number;
+  resolve: (result: FailedEventSaveResult) => void;
 }
 
 const writeQueue: QueueItem[] = [];
+let queuedBytes = 0;
+let queuedEntries = 0;
 let isFlushing = false;
 let flushScheduled = false;
 const flushWaiters: (() => void)[] = [];
@@ -414,23 +280,28 @@ async function processWriteQueue() {
   const events = batch.map((i) => i.entry);
 
   try {
-    await ensureDataDir();
-    await ensureLockFile();
-
-    // Persist + count under the queue-state mutex so this update is atomic with
-    // respect to retryFailedEvents()'s final recompute (mutex before file lock).
     await withQueueState(async () => {
-      await batchAppendEvents(events);
+      const results = await failedForwardStore.append(events);
       const nowMs = Date.now();
-      for (const e of events) recordQueuedEvent(e, nowMs);
+      results.forEach((result, index) => {
+        if (result.status === 'persisted') {
+          recordQueuedEvent(events[index], nowMs);
+          batch[index].resolve({ status: 'persisted' });
+        } else {
+          logger.warn(
+            { consumer_key: events[index].consumerKey },
+            '[Reliability] Rejected failed event at retention quota',
+          );
+          batch[index].resolve({ status: 'rejected', reason: 'quota' });
+        }
+      });
     });
-
-    batch.forEach((i) => i.resolve());
   } catch (err) {
     logger.error({ err }, '[Reliability] Dropped batch events due to lock failure');
-    // Resolve anyway to match previous behavior (best-effort)
-    batch.forEach((i) => i.resolve());
+    batch.forEach((i) => i.resolve({ status: 'rejected', reason: 'io' }));
   } finally {
+    queuedBytes = Math.max(0, queuedBytes - batch.reduce((sum, item) => sum + item.bytes, 0));
+    queuedEntries = Math.max(0, queuedEntries - batch.length);
     isFlushing = false;
     if (writeQueue.length > 0) {
       scheduleFlush();
@@ -444,7 +315,7 @@ export async function saveFailedEvent(
   event: PlexerEvent,
   consumerKey: string,
   error: string,
-): Promise<void> {
+): Promise<FailedEventSaveResult> {
   const failedEvent: FailedEvent = {
     consumerKey,
     event,
@@ -459,17 +330,33 @@ export async function saveFailedEvent(
 
   if (!validateFailedEvent(failedEvent)) {
     logger.error(
-      { errors: validateFailedEvent.errors, failedEvent },
+      { errors: validateFailedEvent.errors, consumer_key: consumerKey },
       'FailedEvent validation failed',
     );
-    // Don't save invalid events
-    return;
+    return { status: 'rejected', reason: 'invalid' };
   }
 
-  // Best-effort: we never reject the promise to the caller, effectively
-  // making it fire-and-forget but with backpressure support if they await it.
-  return new Promise<void>((resolve) => {
-    writeQueue.push({ entry: failedEvent, resolve });
+  const bytes = Buffer.byteLength(JSON.stringify(failedEvent), 'utf8') + 1;
+  const maxBytes = config.failedForwardsMaxBytes ?? 16 * 1024 * 1024;
+  const maxEntries = config.failedForwardsMaxEntries ?? 10_000;
+  // Reserve before scheduling the flush so the in-memory staging queue itself
+  // cannot exceed the same hard byte/entry totals as durable persistence.
+  if (
+    bytes > maxBytes ||
+    queuedBytes + bytes > maxBytes ||
+    queuedEntries + 1 > maxEntries
+  ) {
+    logger.warn(
+      { consumer_key: consumerKey },
+      '[Reliability] Rejected failed event at in-memory retention quota',
+    );
+    return { status: 'rejected', reason: 'quota' };
+  }
+
+  queuedBytes += bytes;
+  queuedEntries++;
+  return new Promise<FailedEventSaveResult>((resolve) => {
+    writeQueue.push({ entry: failedEvent, bytes, resolve });
     scheduleFlush();
   });
 }
@@ -478,7 +365,7 @@ export async function saveFailedEvent(
 export async function saveFailedChronikAgentLedgerEvent(
   event: unknown,
   error: string,
-): Promise<void> {
+): Promise<FailedEventSaveResult> {
   return saveFailedEvent(
     {
       type: 'agent.run.ledger.v1',
@@ -490,72 +377,67 @@ export async function saveFailedChronikAgentLedgerEvent(
   );
 }
 
-export async function retryFailedEvents(): Promise<void> {
-  // Ensure we flush any in-memory events before rotating the log file
+let retryStateChain: Promise<unknown> = Promise.resolve();
+
+export function retryFailedEvents(): Promise<void> {
+  const result = retryStateChain.then(() => runRetryFailedEvents());
+  retryStateChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function boundedRetryLine(
+  entry: FailedEvent,
+  originalRaw: string,
+  originalBytes: number,
+): string {
+  const updated = JSON.stringify(entry);
+  if (Buffer.byteLength(updated, 'utf8') + 1 <= originalBytes) return updated;
+  logger.warn(
+    { consumer_key: entry.consumerKey },
+    '[Reliability] Retry metadata growth exceeded archive slot; preserving original record',
+  );
+  return originalRaw;
+}
+
+async function runRetryFailedEvents(): Promise<void> {
   await flushFailedWrites();
-
   lastRetryAt = new Date().toISOString();
-  await ensureDataDir();
-  await ensureLockFile();
-
-  const dataDir = getDataDir();
-  const failedLog = getFailedLogPath();
-  const lockFile = getLockFilePath();
-
-  let release;
-  let processingFile: string | null = null;
-
+  let claim: QueueClaim | null = null;
   try {
-    // 1. Lock the lockfile
-    release = await lock(lockFile, { retries: LOCK_RETRIES });
-
-    // Check size/existence before rename to avoid empty file churn
-    const stats = await fs.stat(failedLog).catch(() => null);
-    if (!stats || stats.size === 0) {
-      // Release the file lock BEFORE taking the mutex (lock ordering), then
-      // recompute authoritatively under the mutex. This serializes the reset
-      // with the write path and re-reads the queue, so an event written between
-      // the stat above and here is not clobbered to zero.
-      await release();
-      release = null;
+    claim = await failedForwardStore.claimNext();
+    if (!claim) {
       await withQueueState(async () => {
-        const scan = await scanQueueSnapshot(Date.now());
+        const scan = await scanQueueState(Date.now());
         if (scan) applyQueueScan(scan);
       });
       return;
     }
 
-    // 2. Rename to unique processing file
-    processingFile = path.join(dataDir, `processing.${randomUUID()}.jsonl`);
-    await fs.rename(failedLog, processingFile);
-
-    // 3. Create new empty FAILED_LOG so saveFailedEvent can continue working
-    await fs.writeFile(failedLog, '');
-
-    // 4. Release lock immediately to allow new events to be saved
-    await release();
-    release = null;
-
-    // 5. Process the renamed file (processingFile) using streaming
-    const remainingEvents: FailedEvent[] = [];
+    const remainingLines = new Map<number, string>();
     const now = Date.now();
+    const maxAgeMs = config.failedForwardsMaxAgeMs ?? 7 * 24 * 60 * 60 * 1_000;
+    let lineIndex = 0;
+    let corruptDropped = 0;
+    let expiredDropped = 0;
 
-    // Use parallelization to increase retry throughput
     const limit = pLimit(Math.max(1, config.retryConcurrency));
-    // Use a Set to track active wrapper promises (void) for sliding window backpressure & cleanup
     const activePromises = new Set<Promise<void>>();
-    // Ensure windowSize is at least 1 to prevent deadlock; limits active retry tasks (backpressure)
     const windowSize = Math.max(1, config.retryBatchSize);
 
-    for await (const line of readLinesSafe(processingFile)) {
-      if (!line.trim()) continue;
-
-      let entry: FailedEvent;
-      try {
-        entry = JSON.parse(line);
-      } catch {
+    for await (const line of failedForwardStore.readClaim(claim)) {
+      if (!line.nonEmpty) continue;
+      const currentIndex = lineIndex++;
+      const entry = line.entry;
+      if (!entry || line.raw === null) {
+        corruptDropped++;
         continue;
       }
+      if (now - Date.parse(entry.lastAttempt) > maxAgeMs) {
+        expiredDropped++;
+        continue;
+      }
+      const originalRaw = line.raw;
+      const originalBytes = line.bytes;
 
       const nextTime = new Date(entry.nextAttempt).getTime();
 
@@ -574,8 +456,6 @@ export async function retryFailedEvents(): Promise<void> {
 
               if (result.status === 'delivered') {
                 lastCriticalDeliveredAt = new Date().toISOString();
-                // last_error is NOT cleared here: other critical events may remain
-                // queued. The final recompute below derives it from remainingEvents.
                 logger.info(
                   { type: entry.event.type, label: 'Chronik agent.ledger' },
                   '[Retry] Successfully forwarded event to Chronik agent.ledger',
@@ -606,8 +486,6 @@ export async function retryFailedEvents(): Promise<void> {
               entry.nextAttempt = new Date(attemptNow + backoff + jitter).toISOString();
               entry.error = result.error ?? result.status;
               lastError = entry.error;
-              // lastCriticalError is derived from remainingEvents in the final recompute.
-
               logger.warn(
                 { error: entry.error, retryCount: entry.retryCount },
                 '[Retry] Failed to forward to Chronik agent.ledger; event requeued',
@@ -704,22 +582,25 @@ export async function retryFailedEvents(): Promise<void> {
           }
         });
 
-        // Wrap to handle removal from Set upon completion (robust cleanup)
         const wrapper = promise
           .then((res) => {
-            if (res) remainingEvents.push(res);
+            if (res) {
+              remainingLines.set(
+                currentIndex,
+                boundedRetryLine(res, originalRaw, originalBytes),
+              );
+            }
           })
-          // promise never rejects now, but keep catch as defensive programming
           .catch((err) => {
             logger.error({ err }, '[Reliability] Retry wrapper error (should never happen)');
+            remainingLines.set(currentIndex, originalRaw);
           })
           .finally(() => {
             activePromises.delete(wrapper);
           });
         activePromises.add(wrapper);
       } else {
-        // Not time yet -> Re-queue
-        remainingEvents.push(entry);
+        remainingLines.set(currentIndex, originalRaw);
       }
     }
 
@@ -728,57 +609,26 @@ export async function retryFailedEvents(): Promise<void> {
       await Promise.all(activePromises);
     }
 
-    // Persist remaining events and recompute metrics under the queue-state mutex.
-    // The file lock was released at step 4, so events queued during delivery are
-    // already in failedLog; recomputing from that live file (not just
-    // remainingEvents) means those concurrent writes are NOT lost. The mutex
-    // makes the append + rescan + apply atomic vs processWriteQueue's counting.
-    // (Mutex acquired before the file lock inside batchAppendEvents.)
     await withQueueState(async () => {
-      // Batch write remaining events first (crash safety)
-      if (remainingEvents.length > 0) {
-        await batchAppendEvents(remainingEvents);
+      const orderedLines = [...remainingLines.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([, line]) => line);
+      await failedForwardStore.replaceClaim(claim!, orderedLines);
+      claim = null;
+      if (corruptDropped > 0 || expiredDropped > 0) {
+        logger.warn({
+          corrupt_dropped: corruptDropped,
+          expired_dropped: expiredDropped,
+        }, '[Reliability] Removed non-retryable archive records');
       }
-
-      // THEN cleanup processing file
-      await fs.unlink(processingFile!);
-
-      // Authoritative recompute from a locked snapshot of the live queue file
-      // (remaining + any events persisted concurrently during this retry run).
-      const scan = await scanQueueSnapshot(Date.now());
+      const scan = await scanQueueState(Date.now());
       if (scan) applyQueueScan(scan);
     });
-
   } catch (err) {
+    if (claim) await failedForwardStore.abandonClaim(claim);
     logger.error({ err }, '[Reliability] Error processing failed events');
-    // IMPORTANT: If we crash here (e.g. during batchAppendEvents),
-    // we DO NOT unlink processingFile.
-    // initDelivery will pick it up next time.
-  } finally {
-    if (release) await release();
-  }
-}
-
-async function batchAppendEvents(entries: FailedEvent[]) {
-  // Stream-based implementation to avoid memory spike from large string concatenation
-  const iterator = function* () {
-    for (const entry of entries) {
-      yield JSON.stringify(entry) + '\n';
-    }
-  };
-
-  let release;
-  try {
-    release = await lock(getLockFilePath(), { retries: LOCK_RETRIES });
-    await pipeline(
-      Readable.from(iterator()),
-      createWriteStream(getFailedLogPath(), { flags: 'a', encoding: 'utf8' }),
-    );
-  } catch (e) {
-    // Re-throw to prevent processing file deletion
-    throw e;
-  } finally {
-    if (release) await release();
+    // A failed replacement intentionally leaves the archive untouched. It will
+    // be retried after restart or on the next run; no accepted record is lost.
   }
 }
 
