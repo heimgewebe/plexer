@@ -22,6 +22,11 @@ import {
   saveFailedChronikAgentLedgerEvent,
 } from './delivery';
 import { deliverToChronikAgentLedger } from './chronik';
+import {
+  hasValidBearerAuthorization,
+  IngressAdmissionController,
+  IngressRejection,
+} from './ingress';
 
 const pendingFetches = new Set<Promise<void>>();
 /**
@@ -255,6 +260,53 @@ export async function drainPendingRequests(timeoutMs = 5000): Promise<void> {
 export function createServer(): Express {
   const app = express();
 
+  const ingressAdmission = new IngressAdmissionController({
+    windowMs: config.ingressRateWindowMs ?? 60_000,
+    perClientRateLimit: config.ingressPerClientRateLimit ?? 120,
+    globalRateLimit: config.ingressGlobalRateLimit ?? 1_200,
+    perClientMaxInFlight: config.ingressPerClientMaxInFlight ?? 8,
+    globalMaxInFlight: config.ingressGlobalMaxInFlight ?? 64,
+    maxClients: config.ingressMaxClients ?? 1_024,
+  });
+
+  const rejectIngress = (res: Response, rejection: IngressRejection) => {
+    res.set('Retry-After', String(rejection.retryAfterSeconds));
+    return res.status(429).json({
+      status: 'error',
+      message: 'Too Many Requests',
+      retryable: true,
+      retry_after_seconds: rejection.retryAfterSeconds,
+      reason: rejection.reason,
+    });
+  };
+
+  // Authenticate and rate-limit before parsing JSON so unauthenticated callers
+  // cannot consume body-parser work. X-Auth is intentionally not accepted: all
+  // audited Plexer producers either already use Bearer or must migrate to it.
+  app.use(['/events', '/v1/events'], (req: Request, res: Response, next: NextFunction) => {
+    if (!config.plexerToken) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Ingress authentication is not configured',
+        retryable: true,
+      });
+    }
+    if (!hasValidBearerAuthorization(req.get('authorization'), config.plexerToken)) {
+      res.set('WWW-Authenticate', 'Bearer');
+      return res.status(401).json({
+        status: 'error',
+        message: 'Unauthorized',
+        retryable: false,
+      });
+    }
+
+    const clientKey = req.socket.remoteAddress || 'unknown';
+    const admission = ingressAdmission.admitRate(clientKey);
+    if (!admission.accepted) return rejectIngress(res, admission);
+    res.locals.ingressClientKey = clientKey;
+    next();
+  });
+
   app.use(express.json({
     verify: (req, _res, buf) => {
       const rawPath = req.url?.split('?')[0] ?? '';
@@ -347,34 +399,49 @@ export function createServer(): Express {
         });
       }
 
-      const delivery = await deliverToChronikAgentLedger(req.body);
-      logger.info({
-        kind: (req.body as Record<string, unknown>).kind,
-        delivery_status: delivery.status,
-        retryable: delivery.retryable,
-        event_size: validation.eventSize,
-      }, 'Processed v1 event');
+      const work = ingressAdmission.acquireWork(res.locals.ingressClientKey as string);
+      if (!work.accepted) return rejectIngress(res, work);
 
-      if (delivery.status === 'delivered') {
-        return res.status(202).json({ status: 'accepted' });
-      }
+      try {
+        const delivery = await deliverToChronikAgentLedger(req.body);
+        logger.info({
+          kind: (req.body as Record<string, unknown>).kind,
+          delivery_status: delivery.status,
+          retryable: delivery.retryable,
+          event_size: validation.eventSize,
+        }, 'Processed v1 event');
 
-      if (shouldQueueChronikAgentLedgerFailure(delivery)) {
-        await saveFailedChronikAgentLedgerEvent(
-          req.body,
-          delivery.error ?? delivery.status,
-        );
-        return res.status(202).json({
-          status: 'queued',
-          retryable: true,
+        if (delivery.status === 'delivered') {
+          return res.status(202).json({ status: 'accepted' });
+        }
+
+        if (shouldQueueChronikAgentLedgerFailure(delivery)) {
+          const saved = await saveFailedChronikAgentLedgerEvent(
+            req.body,
+            delivery.error ?? delivery.status,
+          );
+          if (saved.status !== 'persisted') {
+            return res.status(503).json({
+              status: 'error',
+              message: 'Failed event queue unavailable',
+              retryable: true,
+              reason: saved.reason,
+            });
+          }
+          return res.status(202).json({
+            status: 'queued',
+            retryable: true,
+          });
+        }
+
+        return res.status(502).json({
+          status: 'error',
+          message: 'Chronik rejected event',
+          retryable: false,
         });
+      } finally {
+        work.release();
       }
-
-      return res.status(502).json({
-        status: 'error',
-        message: 'Chronik rejected event',
-        retryable: false,
-      });
     },
   );
 
@@ -432,11 +499,14 @@ export function createServer(): Express {
         });
       }
 
+      const work = ingressAdmission.acquireWork(res.locals.ingressClientKey as string);
+      if (!work.accepted) return rejectIngress(res, work);
+
       // Process event (logging + forwarding)
       // Detached execution to not block response, but tracked in pendingFetches inside processEvent
       processEvent({ type: normalizedType, source: normalizedSource, payload }).catch(err => {
         logger.error({ err }, 'Error processing event');
-      });
+      }).finally(work.release);
 
       res.status(202).json({ status: 'accepted' });
     },
@@ -532,6 +602,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   serializedEvent = `{"type":${JSON.stringify(type)},"source":${JSON.stringify(source)},"payload":${jsonResult.json}}`;
 
   const eventId = randomUUID();
+  const initiatedFetches: Promise<void>[] = [];
 
   CONSUMERS.forEach(({ key, label, url, token, authKind }) => {
     if (!url) return;
@@ -642,8 +713,11 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
           pendingFetches.delete(fetchPromise);
         });
       pendingFetches.add(fetchPromise);
+      initiatedFetches.push(fetchPromise);
     } catch (error) {
       logger.error({ err: error }, `Failed to initiate forward to ${label}`);
     }
   });
+
+  await Promise.all(initiatedFetches);
 }

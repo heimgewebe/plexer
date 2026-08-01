@@ -21,6 +21,7 @@ const mockConfig: Record<string, unknown> = {
   port: 3000,
   host: '0.0.0.0',
   environment: 'test',
+  plexerToken: 'test-plexer-token',
   chronikUrl: 'http://chronik.local',
   chronikToken: 'chronik-secret',
   dataDir: '', // set per test
@@ -310,7 +311,7 @@ describe('Critical-sink readiness (real fs)', () => {
   });
 
   describe('queue corruption tolerance', () => {
-    it('ignores invalid JSON lines and does not let a bad nextAttempt pollute next_due_at', async () => {
+    it('discards corrupt records and does not let a bad nextAttempt pollute next_due_at', async () => {
       const p = past();
       await seedQueue([
         'this is not json',
@@ -321,20 +322,20 @@ describe('Critical-sink readiness (real fs)', () => {
 
       const r = getCriticalSinkReadiness();
       expect(r.status).toBe('degraded');
-      expect(r.queued).toBe(2); // two parseable critical entries
+      expect(r.queued).toBe(1); // only the schema-valid critical entry survives
       expect(r.next_due_at).toBe(p); // garbage nextAttempt did not set minNext
       expect(r.due_now).toBe(true);
       expect(typeof r.last_error === 'string').toBe(true);
     });
 
-    it('keeps last_error type-safe when an entry has a non-string error', async () => {
+    it('discards an entry with a non-string error', async () => {
       await seedQueue([
         criticalEntry({ nextAttempt: past(), error: 12345 }),
       ]);
       await initDelivery();
 
       const r = getCriticalSinkReadiness();
-      expect(r.queued).toBe(1);
+      expect(r.queued).toBe(0);
       // Non-string error must never become last_error.
       expect(r.last_error === null || typeof r.last_error === 'string').toBe(true);
       expect(r.last_error).not.toBe(12345 as unknown as string);

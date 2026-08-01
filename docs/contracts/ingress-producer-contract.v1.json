@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "contract": "plexer.ingress.producer.v1",
+  "routes": [
+    "/events",
+    "/v1/events"
+  ],
+  "authentication": {
+    "scheme": "Bearer",
+    "server_env": "PLEXER_TOKEN",
+    "header_template": "Authorization: Bearer ${PLEXER_TOKEN}",
+    "x_auth_accepted": false
+  },
+  "retry": {
+    "429": "retry_after_header_seconds",
+    "503": "retryable",
+    "401": "configuration_error_do_not_retry_without_change"
+  },
+  "audited_producers": [
+    {
+      "producer": "plexer-runtime-usefulness-proof",
+      "repository": "heimgewebe/plexer",
+      "path": "scripts/prove-runtime-usefulness.sh",
+      "status": "updated_in_this_change",
+      "token_env": "PLEXER_TOKEN"
+    },
+    {
+      "producer": "metarepo-notify-workflow",
+      "repository": "heimgewebe/metarepo",
+      "audited_local_head": "f3524f9b040be957cfead5b80f7a683d0ea6df72",
+      "path": "templates/workflows/plexer-notify.yml",
+      "status": "bearer_compatible_token_now_required",
+      "token_env": "PLEXER_TOKEN"
+    },
+    {
+      "producer": "wgx-heimgeist-emitter",
+      "repository": "heimgewebe/wgx",
+      "audited_local_head": "9882730f45dec5d9964eb5e9ac33b71bd904af84",
+      "path": "modules/heimgeist.bash",
+      "status": "bearer_compatible_token_now_required",
+      "token_env": "PLEXER_TOKEN"
+    },
+    {
+      "producer": "grabowski-agent-run-outbox",
+      "repository": "heimgewebe/grabowski",
+      "audited_local_head": "e42fcf099793d3b4a9510b11f8129690de83fd3b",
+      "paths": [
+        "src/grabowski_chronik.py",
+        "tests/test_chronik_agent_outbox.py"
+      ],
+      "status": "external_update_required",
+      "token_env": "GRABOWSKI_PLEXER_TOKEN",
+      "required_header_template": "Authorization: Bearer ${GRABOWSKI_PLEXER_TOKEN}",
+      "required_test": "test_send_event_posts_bearer_token_to_plexer"
+    }
+  ]
+}

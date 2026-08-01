@@ -19,6 +19,7 @@ jest.mock('../config', () => ({
     port: 3000,
     host: '0.0.0.0',
     environment: 'test',
+    plexerToken: 'test-plexer-token',
     heimgeistUrl: 'http://heimgeist.local',
     leitstandUrl: 'http://leitstand.local',
     hauskiUrl: 'http://hauski.local',
@@ -35,7 +36,7 @@ jest.mock('../config', () => ({
 jest.mock('../delivery', () => {
   const actual = jest.requireActual('../delivery');
   return {
-    saveFailedEvent: jest.fn().mockResolvedValue(undefined),
+    saveFailedEvent: jest.fn().mockResolvedValue({ status: 'persisted' }),
     getDeliveryMetrics: jest.fn().mockReturnValue({
       counts: { pending: 0, failed: 0 },
       last_error: null,
@@ -124,7 +125,7 @@ describe('Server', () => {
         },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
 
       // Verify fetch was called 4 times (fanout)
@@ -147,7 +148,7 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
 
@@ -179,7 +180,7 @@ describe('Server', () => {
         },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
 
@@ -245,7 +246,7 @@ describe('Server', () => {
         },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
 
@@ -301,7 +302,7 @@ describe('Server', () => {
         payload: { some: 'data' },
       };
 
-      await request(app).post('/events').send(payload);
+      await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const callArgs = fetchMock.mock.calls[0];
@@ -325,7 +326,7 @@ describe('Server', () => {
         payload: { data: 'a'.repeat(300) },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
       // Only Heimgeist should receive 'test.event'
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -375,7 +376,7 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
 
       const expectedBody = JSON.stringify({
@@ -415,7 +416,7 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202); // Still 202 because we don't wait/fail on forward error
 
       // Wait a tick for the async promise to reject and be caught
@@ -431,7 +432,7 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(400);
       expect(response.body.message).toContain('Type and source must be strings');
     });
@@ -442,7 +443,7 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(400);
       expect(response.body.message).toContain('Type and source must be strings');
     });
@@ -453,7 +454,7 @@ describe('Server', () => {
         source: 'test-suite',
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(400);
     });
 
@@ -464,7 +465,7 @@ describe('Server', () => {
         payload: {},
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(400);
     });
 
@@ -475,7 +476,7 @@ describe('Server', () => {
         payload: {},
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(400);
     });
 
@@ -486,7 +487,7 @@ describe('Server', () => {
         payload: {},
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(400);
     });
 
@@ -499,7 +500,7 @@ describe('Server', () => {
         payload: {},
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(400);
       expect(response.body.message).toContain('Invalid event envelope');
     });
@@ -515,7 +516,7 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
     });
@@ -534,7 +535,7 @@ describe('Server', () => {
           source: 'test',
           payload: p
         };
-        const response = await request(app).post('/events').send(payload);
+        const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
         expect(response.status).toBe(202);
       }
     });
@@ -546,7 +547,7 @@ describe('Server', () => {
             payload: {}
         };
 
-        const response = await request(app).post('/events').send(payload);
+        const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
         expect(response.status).toBe(202);
 
         // Verify forwarding was done with lowercase type
@@ -568,7 +569,7 @@ describe('Server', () => {
         },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
 
       expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
@@ -613,7 +614,7 @@ describe('Server', () => {
       };
 
       // Expectation: 202 Accepted
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
 
       // Wait a tick for the async promise rejection handling (logging)
@@ -645,7 +646,7 @@ describe('Server', () => {
         },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
 
       // Wait a tick for the async promise rejection handling (logging)
@@ -687,7 +688,7 @@ describe('Server', () => {
         },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
 
       await new Promise(process.nextTick);
@@ -763,7 +764,7 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       };
 
-      await request(app).post('/events').send(payload);
+      await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
 
       // Wait for async processing
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -781,7 +782,7 @@ describe('Server', () => {
         payload: { foo: 'bar' },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
 
       // Wait for async processing
@@ -808,7 +809,7 @@ describe('Server', () => {
         },
       };
 
-      const response = await request(app).post('/events').send(payload);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
 
       // Wait for async processing

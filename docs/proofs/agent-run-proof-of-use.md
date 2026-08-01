@@ -43,6 +43,7 @@ Required environment:
 
 ```sh
 : "${PLEXER_URL:?set PLEXER_URL, for example http://localhost:3000}"
+: "${PLEXER_TOKEN:?set the token configured on Plexer}"
 : "${CHRONIK_URL:?set CHRONIK_URL, for example http://localhost:4000}"
 ```
 
@@ -53,6 +54,7 @@ Plexer must be configured with `CHRONIK_URL` and, if required by the target, `CH
 ```sh
 curl -sS \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $PLEXER_TOKEN" \
   --data-binary @docs/fixtures/agent-run-completed.v1.json \
   "$PLEXER_URL/v1/events"
 ```
@@ -98,6 +100,8 @@ The proof passes when all of the following hold:
 
 - `422`: the fixture no longer matches the first-slice allow-list; update the fixture or the documented contract, not both silently.
 - `413`: the fixture exceeded the ingress size limit; reduce the fixture.
+- `401`: the producer omitted or supplied the wrong Bearer token; do not fall back to `X-Auth`.
+- `429`: retry after the integer number of seconds in `Retry-After`; the body also sets `retryable=true`.
 - `502`: Chronik rejected the event as permanent failure; inspect Chronik's validation error.
 - `202 queued`: run the retry worker or restore Chronik config, then perform read-back.
 

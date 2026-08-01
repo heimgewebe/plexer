@@ -1,642 +1,295 @@
+import { FailedEvent } from '../types';
 
-import fsPromises from 'fs/promises';
-import fs from 'fs';
-import readline from 'readline';
-import { Readable, Writable } from 'stream';
-import { lock } from 'proper-lockfile';
-
-/**
- * Logger Mock Strategy:
- * Jest automatically hoists jest.mock calls to the top of the block.
- * This ensures the logger is mocked before any imports (like ../delivery) use it.
- * Note: Modules under test must not use the logger at the top-level (outside functions),
- * otherwise the mock might not apply correctly or could lead to initialization order issues.
- */
-
-// Mock fs/promises with explicit factory
-jest.mock('fs/promises', () => ({
-  appendFile: jest.fn(),
-  writeFile: jest.fn(),
-  access: jest.fn(),
-  rename: jest.fn(),
-  unlink: jest.fn(),
-  readdir: jest.fn(),
-  readFile: jest.fn(),
-  mkdir: jest.fn(),
-  stat: jest.fn(),
-  copyFile: jest.fn(),
-}));
-
-// Mock fs (createReadStream, createWriteStream)
-jest.mock('fs', () => ({
-  createReadStream: jest.fn(),
-  createWriteStream: jest.fn(),
-}));
-
-// Mock stream/promises
-jest.mock('stream/promises', () => ({
-  pipeline: jest.fn(),
-}));
-
-// Mock readline
-jest.mock('readline', () => ({
-  createInterface: jest.fn(),
-}));
-
-// Mock proper-lockfile
-jest.mock('proper-lockfile', () => ({
-  lock: jest.fn(),
-}));
-
-// Mock consumers
-jest.mock('../consumers', () => ({
-  CONSUMERS: [
-    { key: 'test-consumer', label: 'Test Consumer', url: 'http://test.local', token: 'token', authKind: 'bearer' },
-  ],
-}));
-
-// Mock logger
-jest.mock('../logger', () => ({
-  logger: {
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn(),
+jest.mock('../config', () => ({
+  config: {
+    dataDir: 'data',
+    retryConcurrency: 2,
+    retryBatchSize: 4,
+    failedForwardsMaxBytes: 1024 * 1024,
+    failedForwardsMaxEntries: 100,
+    failedForwardsMaxAgeMs: 60_000,
+    chronikUrl: 'http://chronik.local',
   },
 }));
+jest.mock('../logger', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+jest.mock('../chronik', () => ({ deliverToChronikAgentLedger: jest.fn() }));
+jest.mock('../consumers', () => ({
+  CONSUMERS: [
+    {
+      key: 'test-consumer',
+      label: 'Test Consumer',
+      url: 'http://test.local',
+      token: 'consumer-token',
+      authKind: 'bearer',
+    },
+  ],
+}));
+jest.mock('../failedForwardStore', () => ({
+  failedForwardStore: {
+    initialize: jest.fn(),
+    append: jest.fn(),
+    claimNext: jest.fn(),
+    readClaim: jest.fn(),
+    replaceClaim: jest.fn(),
+    abandonClaim: jest.fn(),
+    scan: jest.fn(),
+  },
+}));
+
+import {
+  flushFailedWrites,
+  initDelivery,
+  retryFailedEvents,
+  saveFailedEvent,
+} from '../delivery';
+import { failedForwardStore } from '../failedForwardStore';
+import { deliverToChronikAgentLedger } from '../chronik';
 import { logger } from '../logger';
 
-// Mock global fetch
-const mockFetch = jest.fn();
-global.fetch = mockFetch as unknown as typeof fetch;
+const store = failedForwardStore as jest.Mocked<typeof failedForwardStore>;
+const deliverMock = deliverToChronikAgentLedger as jest.MockedFunction<
+  typeof deliverToChronikAgentLedger
+>;
 
-// Import subject under test
-import { saveFailedEvent, retryFailedEvents, initDelivery, flushFailedWrites } from '../delivery';
+const makeEntry = (overrides: Partial<FailedEvent> = {}): FailedEvent => ({
+  consumerKey: 'test-consumer',
+  event: { type: 'test', source: 'src', payload: {} },
+  retryCount: 0,
+  lastAttempt: new Date().toISOString(),
+  nextAttempt: new Date(Date.now() - 1_000).toISOString(),
+  error: 'previous failure',
+  ...overrides,
+});
 
-describe('Delivery Reliability', () => {
-  let mockStream: any;
-  let mockRl: any;
-  let mockLockRelease: any;
-  let mockDestStream: Writable;
+const queueLine = (entry: FailedEvent, extraBytes = 256) => {
+  const raw = JSON.stringify(entry);
+  return {
+    raw,
+    bytes: Buffer.byteLength(raw, 'utf8') + 1 + extraBytes,
+    nonEmpty: true,
+    entry,
+  };
+};
 
-  // Access mocks
-  const mockAppendFile = fsPromises.appendFile as jest.Mock;
-  const mockWriteFile = fsPromises.writeFile as jest.Mock;
-  const mockAccess = fsPromises.access as jest.Mock;
-  const mockRename = fsPromises.rename as jest.Mock;
-  const mockUnlink = fsPromises.unlink as jest.Mock;
-  const mockReaddir = fsPromises.readdir as jest.Mock;
-  const mockReadFile = fsPromises.readFile as jest.Mock;
-  const mockMkdir = fsPromises.mkdir as jest.Mock;
-  const mockStat = fsPromises.stat as jest.Mock;
-  const mockCopyFile = fsPromises.copyFile as jest.Mock;
+const lines = (...values: ReturnType<typeof queueLine>[]) => (
+  async function* () {
+    for (const value of values) yield value;
+  }
+)();
 
-  const mockCreateReadStream = fs.createReadStream as jest.Mock;
-  const mockCreateWriteStream = fs.createWriteStream as jest.Mock;
-  const mockPipeline = require('stream/promises').pipeline as jest.Mock;
-  const mockCreateInterface = readline.createInterface as jest.Mock;
-  const mockLock = lock as jest.Mock;
-
+describe('Delivery reliability orchestration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-
-    // Default fs/promises behavior
-    mockAccess.mockResolvedValue(undefined); // Files exist by default
-    mockStat.mockResolvedValue({ size: 100 }); // File has content by default
-    mockReaddir.mockResolvedValue([]); // No orphan files by default
-    mockMkdir.mockResolvedValue(undefined);
-    mockAppendFile.mockResolvedValue(undefined);
-    mockWriteFile.mockResolvedValue(undefined);
-    mockRename.mockResolvedValue(undefined);
-    mockUnlink.mockResolvedValue(undefined);
-    mockReadFile.mockResolvedValue('');
-    mockCopyFile.mockResolvedValue(undefined);
-
-    // Setup proper-lockfile
-    mockLockRelease = jest.fn();
-    mockLock.mockResolvedValue(mockLockRelease);
-
-    // Setup stream/readline mocks
-    mockStream = {
-      on: jest.fn(),
-      off: jest.fn(),
-      removeListener: jest.fn(),
-      destroy: jest.fn(),
-    };
-    mockCreateReadStream.mockReturnValue(mockStream);
-    // Mock createWriteStream to return a valid Writable stub to avoid misleading tests
-    mockDestStream = new Writable({ write: (c, e, cb) => cb() });
-    mockCreateWriteStream.mockReturnValue(mockDestStream);
-
-    // Explicitly resolve pipeline to avoid hangs
-    mockPipeline.mockResolvedValue(undefined);
-
-    mockRl = {
-      on: jest.fn(),
-      off: jest.fn(),
-      removeListener: jest.fn(),
-      close: jest.fn(),
-      [Symbol.asyncIterator]: jest.fn(),
-    };
-
-    // Default empty iterator
-    const emptyGenerator = async function* () {};
-    mockRl[Symbol.asyncIterator].mockReturnValue(emptyGenerator());
-
-    mockCreateInterface.mockReturnValue(mockRl);
-  });
-
-  const failAfter = (ms: number, msg: string) => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const promise = new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => reject(new Error(msg)), ms);
-      const t = timeout as unknown as { unref?: () => void };
-      if (typeof t.unref === 'function') {
-        t.unref();
-      }
+    store.initialize.mockResolvedValue({
+      bytes: 0,
+      entries: 0,
+      corruptDropped: 0,
+      expiredDropped: 0,
+      quotaDropped: 0,
     });
-    return { promise, cancel: () => { if (timeout) clearTimeout(timeout); } };
-  };
+    store.append.mockImplementation(async (entries) => (
+      entries.map(() => ({ status: 'persisted' as const }))
+    ));
+    store.claimNext.mockResolvedValue(null);
+    store.readClaim.mockImplementation(() => lines());
+    store.replaceClaim.mockResolvedValue(undefined);
+    store.scan.mockResolvedValue({ bytes: 0, entries: 0 });
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 }) as unknown as typeof fetch;
+  });
 
   afterEach(async () => {
-    // Ensure any leftover queue items are drained to prevent state leakage between tests
-    const timeout = failAfter(1500, 'flushFailedWrites() did not drain (possible stuck lock/mock)');
-    try {
-      await Promise.race([
-        flushFailedWrites(),
-        timeout.promise,
-      ]);
-    } catch (e) {
-      // Best-effort cleanup: do not fail the test if cleanup times out
-      // logger.warn({ err: e }, 'Cleanup failed');
-    } finally {
-      timeout.cancel();
+    await flushFailedWrites();
+  });
+
+  it('persists a valid failed event and reports the durable result', async () => {
+    const result = await saveFailedEvent(
+      { type: 'test', source: 'src', payload: {} },
+      'test-consumer',
+      'failure',
+    );
+
+    expect(result).toEqual({ status: 'persisted' });
+    expect(store.append).toHaveBeenCalledTimes(1);
+    expect(store.append.mock.calls[0][0][0]).toMatchObject({
+      consumerKey: 'test-consumer',
+      retryCount: 0,
+      error: 'failure',
+    });
+  });
+
+  it('returns an explicit quota rejection instead of claiming persistence', async () => {
+    store.append.mockResolvedValueOnce([{ status: 'rejected', reason: 'quota' }]);
+    const result = await saveFailedEvent(
+      { type: 'test', source: 'src', payload: {} },
+      'test-consumer',
+      'failure',
+    );
+    expect(result).toEqual({ status: 'rejected', reason: 'quota' });
+  });
+
+  it('keeps the in-memory entry reservation bounded while a batch is flushing', async () => {
+    let releaseAppend!: () => void;
+    store.append.mockImplementationOnce((entries) => new Promise((resolve) => {
+      releaseAppend = () => resolve(entries.map(() => ({ status: 'persisted' as const })));
+    }));
+    const first = saveFailedEvent(
+      { type: 'test', source: 'src', payload: {} },
+      'test-consumer',
+      'failure',
+    );
+    while (store.append.mock.calls.length === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
     }
+
+    const staged = Array.from({ length: 99 }, () => saveFailedEvent(
+      { type: 'test', source: 'src', payload: {} },
+      'test-consumer',
+      'failure',
+    ));
+    const excess = await saveFailedEvent(
+      { type: 'test', source: 'src', payload: {} },
+      'test-consumer',
+      'failure',
+    );
+    expect(excess).toEqual({ status: 'rejected', reason: 'quota' });
+
+    releaseAppend();
+    await Promise.all([first, ...staged]);
   });
 
-  const mockReadLines = (lines: string[]) => {
-    const generator = async function* () {
-      for (const line of lines) {
-        yield line;
+  it('rejects invalid queue records before the store and does not log payloads', async () => {
+    const result = await saveFailedEvent(
+      { type: 'test' } as never,
+      'test-consumer',
+      'failure',
+    );
+    expect(result).toEqual({ status: 'rejected', reason: 'invalid' });
+    expect(store.append).not.toHaveBeenCalled();
+    const serializedLogs = JSON.stringify((logger.error as jest.Mock).mock.calls);
+    expect(serializedLogs).not.toContain('"payload"');
+  });
+
+  it('normalizes retention and scans all queue files on restart', async () => {
+    store.initialize.mockResolvedValueOnce({
+      bytes: 200,
+      entries: 1,
+      corruptDropped: 1,
+      expiredDropped: 2,
+      quotaDropped: 3,
+    });
+    await initDelivery();
+    expect(store.initialize).toHaveBeenCalledTimes(1);
+    expect(store.scan).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        corrupt_dropped: 1,
+        expired_dropped: 2,
+        quota_dropped: 3,
+      }),
+      expect.stringContaining('retention'),
+    );
+  });
+
+  it('removes a successfully retried archive entry', async () => {
+    const entry = makeEntry();
+    const line = queueLine(entry);
+    store.claimNext.mockResolvedValueOnce({ path: '/queue/processing.a.jsonl', bytes: line.bytes, entries: 1 });
+    store.readClaim.mockImplementationOnce(() => lines(line));
+
+    await retryFailedEvents();
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://test.local',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(store.replaceClaim).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/queue/processing.a.jsonl' }),
+      [],
+    );
+  });
+
+  it('requeues a failed retry with bounded updated metadata', async () => {
+    const entry = makeEntry();
+    const line = queueLine(entry);
+    store.claimNext.mockResolvedValueOnce({ path: '/queue/processing.b.jsonl', bytes: line.bytes, entries: 1 });
+    store.readClaim.mockImplementationOnce(() => lines(line));
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Error',
+    }) as unknown as typeof fetch;
+
+    await retryFailedEvents();
+
+    const replacement = store.replaceClaim.mock.calls[0][1];
+    expect(replacement).toHaveLength(1);
+    const saved = JSON.parse(replacement[0]);
+    expect(saved.retryCount).toBe(1);
+    expect(Date.parse(saved.nextAttempt)).toBeGreaterThan(Date.now());
+  });
+
+  it('preserves a future entry without attempting delivery', async () => {
+    const entry = makeEntry({
+      nextAttempt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const line = queueLine(entry);
+    store.claimNext.mockResolvedValueOnce({ path: '/queue/processing.c.jsonl', bytes: line.bytes, entries: 1 });
+    store.readClaim.mockImplementationOnce(() => lines(line));
+
+    await retryFailedEvents();
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(store.replaceClaim.mock.calls[0][1]).toEqual([line.raw]);
+  });
+
+  it('drops corrupt archive lines deterministically', async () => {
+    store.claimNext.mockResolvedValueOnce({ path: '/queue/processing.d.jsonl', bytes: 8, entries: 1 });
+    store.readClaim.mockImplementationOnce(() => (
+      async function* () {
+        yield { raw: 'broken', bytes: 7, nonEmpty: true };
       }
-    };
-    mockRl[Symbol.asyncIterator].mockReturnValue(generator());
-  };
+    )());
 
-  describe('saveFailedEvent', () => {
-    it('should append valid failed event to log', async () => {
-      const event = { type: 'test', source: 'src', payload: {} };
+    await retryFailedEvents();
 
-      await saveFailedEvent(event, 'test-consumer', 'some error');
-
-      // Explicitly wait for flush to ensure deterministic verification of pipeline calls
-      await flushFailedWrites();
-
-      // Now uses batchAppendEvents which uses createWriteStream + pipeline
-      expect(mockCreateWriteStream).toHaveBeenCalledWith(
-        expect.stringContaining('failed_forwards.jsonl'),
-        expect.objectContaining({ flags: 'a', encoding: 'utf8' })
-      );
-
-      // Verify content via pipeline source
-      const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
-      const pipelineCall = pipelineCalls.pop();
-      expect(pipelineCall).toBeDefined();
-      const readable = pipelineCall[0] as Readable;
-      const chunks = [];
-      for await (const chunk of readable) chunks.push(chunk);
-      const content = chunks.join('');
-
-      expect(content).toContain('"consumerKey":"test-consumer"');
-      expect(mockLock).toHaveBeenCalled();
-      expect(mockLockRelease).toHaveBeenCalled();
-    });
-
-    it('should not append invalid event (missing fields)', async () => {
-       const invalidEvent = { type: 'test' } as any; // Invalid
-
-       // Pass invalid event (schema check happens inside saveFailedEvent)
-       await saveFailedEvent(invalidEvent, 'test-consumer', 'err');
-
-       expect(mockCreateWriteStream).not.toHaveBeenCalled();
-    });
-
-    it('should wait for flushFailedWrites to drain the queue', async () => {
-        let resolveLock: ((val: any) => void) | undefined;
-        let lockCalledResolve!: () => void;
-        const lockCalled = new Promise<void>(r => { lockCalledResolve = r; });
-
-        mockLock.mockImplementationOnce(() => {
-            lockCalledResolve();
-            return new Promise(resolve => { resolveLock = resolve; });
-        });
-
-        const event = { type: 'test', source: 'src', payload: {} };
-        const savePromise = saveFailedEvent(event, 'test-consumer', 'err');
-        const flushPromise = flushFailedWrites();
-
-        // Guard against infinite hang if lock is never called
-        const timeout = failAfter(1500, 'Timeout waiting for lock acquisition');
-        try {
-            await Promise.race([lockCalled, timeout.promise]);
-        } finally {
-            timeout.cancel();
-        }
-
-        if (!resolveLock) {
-            throw new Error('Lock promise resolver missing despite lockCalled resolving');
-        }
-        resolveLock(mockLockRelease);
-
-        await flushPromise;
-        await savePromise;
-
-        expect(mockCreateWriteStream).toHaveBeenCalled();
-    });
+    expect(store.replaceClaim.mock.calls[0][1]).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ corrupt_dropped: 1 }),
+      expect.stringContaining('non-retryable archive'),
+    );
   });
 
-  describe('retryFailedEvents', () => {
-    it('should forward due events successfully and remove them', async () => {
-      // Mock renaming success
-      mockRename.mockResolvedValue(undefined);
+  it('leaves a claimed archive intact when replacement fails', async () => {
+    const entry = makeEntry({ nextAttempt: new Date(Date.now() + 60_000).toISOString() });
+    const line = queueLine(entry);
+    const claim = { path: '/queue/processing.e.jsonl', bytes: line.bytes, entries: 1 };
+    store.claimNext.mockResolvedValueOnce(claim);
+    store.readClaim.mockImplementationOnce(() => lines(line));
+    store.replaceClaim.mockRejectedValueOnce(new Error('disk failure'));
 
-      const dueEvent = {
-        consumerKey: 'test-consumer',
-        event: { type: 't', source: 's', payload: {} },
-        retryCount: 0,
-        nextAttempt: new Date(Date.now() - 1000).toISOString(), // Due
-        lastAttempt: new Date().toISOString(),
-        error: 'prev error'
-      };
+    await retryFailedEvents();
 
-      mockReadLines([JSON.stringify(dueEvent)]);
-
-      // Mock fetch success
-      mockFetch.mockResolvedValue({
-        ok: true,
-        status: 200,
-      });
-
-      await retryFailedEvents();
-
-      // Should verify lock -> rename -> write empty -> unlock
-      expect(mockRename).toHaveBeenCalled();
-      expect(mockWriteFile).toHaveBeenCalledWith(expect.stringContaining('failed_forwards.jsonl'), '');
-
-      // Should fetch
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://test.local',
-        expect.objectContaining({ method: 'POST' })
-      );
-
-      // Should NOT re-append (success means removed from queue)
-      expect(mockAppendFile).not.toHaveBeenCalled();
-
-      // Should clean up processing file
-      expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('processing.'));
-
-      // Verify resource cleanup
-      expect(mockRl.close).toHaveBeenCalled();
-      expect(mockStream.destroy).toHaveBeenCalled();
-    });
-
-    it('should increment retry count and requeue on failure', async () => {
-      const dueEvent = {
-        consumerKey: 'test-consumer',
-        event: { type: 't', source: 's', payload: {} },
-        retryCount: 0,
-        nextAttempt: new Date(Date.now() - 1000).toISOString(), // Due
-        lastAttempt: new Date().toISOString(),
-        error: 'prev error'
-      };
-
-      mockReadLines([JSON.stringify(dueEvent)]);
-
-      // Mock fetch failure
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Error'
-      });
-
-      await retryFailedEvents();
-
-      // Should attempt fetch
-      expect(mockFetch).toHaveBeenCalled();
-
-      // Should re-append with incremented retry count
-      expect(mockCreateWriteStream).toHaveBeenCalledWith(
-        expect.stringContaining('failed_forwards.jsonl'),
-        expect.objectContaining({ flags: 'a', encoding: 'utf8' }),
-      );
-      expect(mockPipeline).toHaveBeenCalled();
-
-      // Inspect streamed content (Source-side verification since pipeline is mocked)
-      // Use filter + pop to get the LAST call associated with our dest stream
-      const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
-      const pipelineCall = pipelineCalls.pop(); // Get last call
-      expect(pipelineCall).toBeDefined();
-      const readable = pipelineCall[0] as Readable;
-      const chunks = [];
-      for await (const chunk of readable) chunks.push(chunk);
-      const content = chunks.join('');
-
-      expect(content).toContain('"retryCount":1');
-
-      // Cleanup
-      expect(mockUnlink).toHaveBeenCalled();
-    });
-
-    it('should requeue future events without attempting fetch', async () => {
-      const futureEvent = {
-        consumerKey: 'test-consumer',
-        event: { type: 't', source: 's', payload: {} },
-        retryCount: 0,
-        nextAttempt: new Date(Date.now() + 100000).toISOString(), // Future
-        lastAttempt: new Date().toISOString(),
-        error: 'prev error',
-      };
-
-      mockReadLines([JSON.stringify(futureEvent)]);
-
-      await retryFailedEvents();
-
-      expect(mockFetch).not.toHaveBeenCalled();
-
-      // Should re-append unchanged (or at least preserved)
-      expect(mockCreateWriteStream).toHaveBeenCalledWith(
-        expect.stringContaining('failed_forwards.jsonl'),
-        expect.objectContaining({ flags: 'a', encoding: 'utf8' }),
-      );
-      expect(mockPipeline).toHaveBeenCalled();
-
-      // Inspect streamed content (Source-side verification since pipeline is mocked)
-      const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
-      const pipelineCall = pipelineCalls.pop();
-      expect(pipelineCall).toBeDefined();
-      const readable = pipelineCall[0] as Readable;
-      const chunks = [];
-      for await (const chunk of readable) chunks.push(chunk);
-      const content = chunks.join('');
-
-      expect(content).toContain('"retryCount":0');
-    });
-
-    it('should ensure nextAttempt is strictly in the future after a failed retry', async () => {
-      const now = Date.now();
-      const dueEvent = {
-        consumerKey: 'test-consumer',
-        event: { type: 't', source: 's', payload: {} },
-        retryCount: 0,
-        nextAttempt: new Date(now - 1000).toISOString(), // Due
-        lastAttempt: new Date().toISOString(),
-        error: 'prev error',
-      };
-
-      mockReadLines([JSON.stringify(dueEvent)]);
-
-      // Mock fetch failure (500)
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        statusText: 'Internal Error',
-      });
-
-      await retryFailedEvents();
-
-      expect(mockCreateWriteStream).toHaveBeenCalledWith(
-        expect.stringContaining('failed_forwards.jsonl'),
-        expect.any(Object),
-      );
-
-      // Inspect streamed content (Source-side verification since pipeline is mocked)
-      const pipelineCalls = mockPipeline.mock.calls.filter((call: any[]) => call[1] === mockDestStream);
-      const pipelineCall = pipelineCalls.pop();
-      expect(pipelineCall).toBeDefined();
-      const readable = pipelineCall[0] as Readable;
-      const chunks = [];
-      for await (const chunk of readable) chunks.push(chunk);
-      const content = chunks.join('');
-
-      const savedLines = content.trim().split('\n');
-      const savedEvent = JSON.parse(savedLines[0]); // Should be the only event
-
-      const nextAttemptTime = new Date(savedEvent.nextAttempt).getTime();
-      expect(nextAttemptTime).toBeGreaterThan(now);
-    });
-
-    it('should handle stream errors gracefully during retry', async () => {
-        // Mock renaming success
-        mockRename.mockResolvedValue(undefined);
-
-        // Simulate stream error immediately upon listener registration
-        mockStream.on.mockImplementation((event: string, cb: Function) => {
-            if (event === 'error') cb(new Error('Stream failure'));
-        });
-
-        // Mock empty iterator (simulating loop termination via rl.close())
-        mockRl[Symbol.asyncIterator].mockReturnValue((async function*() {})());
-
-        await retryFailedEvents();
-
-        // Verify cleanup and error handling
-        expect(mockLockRelease).toHaveBeenCalled();
-        expect(logger.error).toHaveBeenCalledWith(
-            expect.objectContaining({ err: expect.any(Error) }),
-            expect.stringContaining('Error processing failed events')
-        );
-
-        // Verify resource teardown
-        expect(mockRl.close).toHaveBeenCalled();
-        expect(mockStream.destroy).toHaveBeenCalled();
-
-        // Verify detach (off OR removeListener called)
-        const streamDetached = mockStream.off.mock.calls.length + mockStream.removeListener.mock.calls.length;
-        const rlDetached = mockRl.off.mock.calls.length + mockRl.removeListener.mock.calls.length;
-        expect(streamDetached).toBeGreaterThan(0);
-        expect(rlDetached).toBeGreaterThan(0);
-
-        // File should NOT be unlinked (crash recovery)
-        expect(mockUnlink).not.toHaveBeenCalled();
-    });
-
-    it('should gracefully handle missing failed log (no crash)', async () => {
-      // Mock stat failing (file missing)
-      const err: any = new Error('ENOENT: no such file or directory');
-      err.code = 'ENOENT';
-      mockStat.mockRejectedValueOnce(err);
-
-      await retryFailedEvents();
-
-      // Should check stat
-      expect(mockStat).toHaveBeenCalled();
-
-      // Should NOT rename
-      expect(mockRename).not.toHaveBeenCalled();
-
-      // Should NOT fetch
-      expect(mockFetch).not.toHaveBeenCalled();
-
-      // Should release lock
-      expect(mockLockRelease).toHaveBeenCalled();
-    });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      expect.stringContaining('Error processing failed events'),
+    );
   });
 
-  describe('initDelivery', () => {
-    beforeEach(() => {
-       mockPipeline.mockClear();
-       mockCreateReadStream.mockClear();
-       mockCreateWriteStream.mockClear();
-
-       mockCreateReadStream.mockReturnValue(Readable.from(['x']));
-       mockCreateWriteStream.mockReturnValue(new Writable({ write: (c, e, cb) => cb() }));
+  it('retries Chronik ledger entries through the critical delivery path', async () => {
+    const entry = makeEntry({
+      consumerKey: 'chronik-agent-ledger',
+      event: { type: 'agent.run.ledger.v1', source: 'plexer', payload: { kind: 'agent.run.completed' } },
     });
+    const line = queueLine(entry);
+    store.claimNext.mockResolvedValueOnce({ path: '/queue/processing.f.jsonl', bytes: line.bytes, entries: 1 });
+    store.readClaim.mockImplementationOnce(() => lines(line));
+    deliverMock.mockResolvedValue({ status: 'delivered', retryable: false, statusCode: 202 });
 
-    it('should recover orphaned processing files', async () => {
-        mockReaddir.mockResolvedValue(['processing.123.jsonl']);
-        mockPipeline.mockResolvedValue(undefined);
+    await retryFailedEvents();
 
-        await initDelivery();
-
-        // Lock -> Read orphan -> Append to failed log -> Unlink orphan -> Unlock
-        expect(mockLock).toHaveBeenCalled();
-
-        expect(mockCreateReadStream).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
-        expect(mockCreateWriteStream).toHaveBeenCalledWith(
-            expect.stringContaining('failed_forwards.jsonl'),
-            { flags: 'a' }
-        );
-        expect(mockPipeline).toHaveBeenCalled();
-
-        expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
-        expect(mockLockRelease).toHaveBeenCalled();
-    });
-
-    it('should handle pipeline failure during orphan recovery', async () => {
-        (logger.error as jest.Mock).mockClear();
-        mockReaddir.mockResolvedValue(['processing.123.jsonl']);
-        mockPipeline.mockRejectedValueOnce(new Error('Pipeline error'));
-
-        await initDelivery();
-
-        // Lock -> Pipeline Error -> Log Error -> Unlock (No Unlink)
-        expect(mockLock).toHaveBeenCalled();
-        expect(mockPipeline).toHaveBeenCalled();
-
-        expect(logger.error).toHaveBeenCalledWith(
-            expect.objectContaining({ err: expect.any(Error) }),
-            expect.stringContaining('Failed to recover orphaned file')
-        );
-
-        expect(mockUnlink).not.toHaveBeenCalledWith(expect.stringContaining('processing.123.jsonl'));
-        expect(mockLockRelease).toHaveBeenCalled();
-    });
-
-    it('should scan metrics using a file copy (snapshot)', async () => {
-        // Ensure no orphans so we focus on scan
-        mockReaddir.mockResolvedValue([]);
-
-        // Mock failed log existence
-        mockAccess.mockResolvedValue(undefined);
-
-        // Run init
-        await initDelivery();
-
-        // Should lock
-        expect(mockLock).toHaveBeenCalled();
-
-        // Should copy (snapshot)
-        expect(mockCopyFile).toHaveBeenCalledWith(
-            expect.stringContaining('failed_forwards.jsonl'),
-            expect.stringContaining('snapshot.')
-        );
-
-        // Should create read stream for snapshot
-        expect(mockCreateReadStream).toHaveBeenCalledWith(
-            expect.stringContaining('snapshot.')
-        );
-        // Should NOT read from the source file directly (metrics scan)
-        expect(mockCreateReadStream).not.toHaveBeenCalledWith(
-            expect.stringContaining('failed_forwards.jsonl')
-        );
-
-        // Should release lock
-        expect(mockLockRelease).toHaveBeenCalled();
-
-        // Should unlink snapshot
-        expect(mockUnlink).toHaveBeenCalledWith(expect.stringContaining('snapshot.'));
-    });
-
-    it('should handle copy failure gracefully', async () => {
-        // Clear mocks to ensure no interference from other tests/calls
-        (logger.error as jest.Mock).mockClear();
-        mockUnlink.mockClear();
-        mockCreateReadStream.mockClear();
-        mockCopyFile.mockClear();
-
-        mockReaddir.mockResolvedValue([]);
-        mockAccess.mockResolvedValue(undefined);
-
-        // Copy fails
-        mockCopyFile.mockRejectedValueOnce(new Error('Disk full'));
-
-        await initDelivery();
-
-        // Should try copy
-        expect(mockCopyFile).toHaveBeenCalled();
-
-        // Should log error
-        expect(logger.error).toHaveBeenCalledWith(
-            expect.objectContaining({ err: expect.any(Error) }),
-            expect.stringContaining('Failed to snapshot queue for metrics scan')
-        );
-
-        // Should NOT process snapshot
-        expect(mockCreateReadStream).not.toHaveBeenCalledWith(
-            expect.stringContaining('snapshot.')
-        );
-
-        // Should NOT attempt to unlink any snapshot file (robust check)
-        const unlinkedSnapshot = mockUnlink.mock.calls.some((args: any[]) =>
-            String(args[0]).includes('snapshot.')
-        );
-        expect(unlinkedSnapshot).toBe(false);
-
-        // Should ensure lock is released
-        expect(mockLockRelease).toHaveBeenCalled();
-    });
-
-    it('should handle lock failure gracefully', async () => {
-        // Clear mocks
-        (logger.error as jest.Mock).mockClear();
-        mockCopyFile.mockClear();
-        mockLockRelease?.mockClear?.();
-
-        mockReaddir.mockResolvedValue([]);
-        mockAccess.mockResolvedValue(undefined);
-
-        // Lock fails
-        mockLock.mockRejectedValueOnce(new Error('Lock contention'));
-
-        await initDelivery();
-
-        // Should try lock with specific options
-        expect(mockLock).toHaveBeenCalledWith(
-            expect.stringContaining('failed_forwards.lock'),
-            expect.objectContaining({ retries: 3 })
-        );
-
-        // Should NOT copy
-        expect(mockCopyFile).not.toHaveBeenCalled();
-
-        // Should log error
-        expect(logger.error).toHaveBeenCalledWith(
-            expect.objectContaining({ err: expect.any(Error) }),
-            expect.stringContaining('Failed to snapshot queue for metrics scan')
-        );
-
-        // Should NOT release lock (it wasn't acquired)
-        expect(mockLockRelease).not.toHaveBeenCalled();
-    });
+    expect(deliverMock).toHaveBeenCalledWith(entry.event.payload);
+    expect(store.replaceClaim.mock.calls[0][1]).toEqual([]);
   });
 });
