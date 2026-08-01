@@ -70,7 +70,9 @@ npm is not supported.
 ### Umgebungsvariablen
 
 - `PORT` (default: 3000)
-- `HOST` (default: 0.0.0.0)
+- `HOST` (default: `127.0.0.1`)
+- `PLEXER_TOKEN`: Pflicht-Credential für `POST /events` und `POST /v1/events` (`Authorization: Bearer …`). Ohne Token bleibt Ingress fail-closed (`503`).
+- `PLEXER_ALLOW_NON_LOOPBACK` (default: `false`): muss exakt `true` sein, wenn `HOST` nicht Loopback ist; zusätzlich ist ein aktives `PLEXER_TOKEN` erforderlich.
 - `NODE_ENV` (default: development)
 - `PLEXER_DATA_DIR`: Pfad zum Verzeichnis, in dem die Queue für fehlgeschlagene Events persistiert wird (default: `./data`).
   - **Hinweis für WGX:** Die Flow-Definition in `.wgx/flows.json` erwartet die Queue unter `data/failed_forwards.jsonl`. Wenn `PLEXER_DATA_DIR` geändert wird, muss der Flow-Pfad angepasst oder ein Symlink verwendet werden.
@@ -81,6 +83,15 @@ npm is not supported.
 |----------|---------|--------------|
 | `RETRY_CONCURRENCY` | `5` | Anzahl gleichzeitiger Forward-Versuche beim Retry. Erhöht den Durchsatz, belastet aber Zielsysteme stärker. |
 | `RETRY_BATCH_SIZE` | `50` | Maximale Anzahl gleichzeitig aktiver Retry-Tasks im Sliding Window (Backpressure Control). Empfehlung: `RETRY_BATCH_SIZE >= RETRY_CONCURRENCY`. |
+| `PLEXER_INGRESS_RATE_WINDOW_MS` | `60000` | Festes Rate-Limit-Fenster; `429` liefert die deterministische Restzeit via `Retry-After`. |
+| `PLEXER_INGRESS_PER_CLIENT_RATE_LIMIT` | `120` | Requests pro direkter Client-Adresse und Fenster. |
+| `PLEXER_INGRESS_GLOBAL_RATE_LIMIT` | `1200` | Globale Requests pro Fenster. |
+| `PLEXER_INGRESS_PER_CLIENT_MAX_IN_FLIGHT` | `8` | Gleichzeitige Ingress-Arbeiten pro Client. |
+| `PLEXER_INGRESS_GLOBAL_MAX_IN_FLIGHT` | `64` | Globale gleichzeitige Ingress-Arbeiten. |
+| `PLEXER_INGRESS_MAX_CLIENTS` | `1024` | Harte Obergrenze der im Speicher gehaltenen Client-Zähler. |
+| `FAILED_FORWARDS_MAX_BYTES` | `16777216` | Harte Byte-Gesamtgrenze über aktive Queue und Retry-Archive. |
+| `FAILED_FORWARDS_MAX_ENTRIES` | `10000` | Harte Eintrags-Gesamtgrenze über aktive Queue und Retry-Archive. |
+| `FAILED_FORWARDS_MAX_AGE_MS` | `604800000` | Maximales Alter seit `lastAttempt`; ältere Einträge werden deterministisch verworfen. |
 
 ### Service-URLs & Authentifizierung
 
@@ -98,7 +109,7 @@ Plexer wendet automatisch den korrekten Auth-Header je nach Zielsystem an.
 ## Reliability & Contracts
 
 ### Persistence & Queue
-Plexer nutzt eine persistente, dateibasierte Queue (`failed_forwards.jsonl`), um Events auch bei temporären Ausfällen der Konsumenten zuzustellen. Die Verarbeitung erfolgt thread-safe über `proper-lockfile` (Locking auf `failed_forwards.lock`), sodass mehrere Prozesse oder Neustarts keine Datenkorruption verursachen.
+Plexer nutzt eine persistente, dateibasierte Queue (`failed_forwards.jsonl`), erstklassige Retry-Archive (`processing.*.jsonl`) und atomar geclaimte `retrying.*.jsonl`-Dateien, um Events auch bei temporären Ausfällen der Konsumenten zuzustellen. Byte-, Eintrags- und Altersgrenzen gelten atomar über aktive Datei, Archive und Claims. Bestehende Retry-Daten haben Vorrang; neue Einträge werden an der exakten Quota-Grenze explizit abgelehnt. Beim Start werden korrupte/abgelaufene Zeilen entfernt, Crash-Claims wieder retrybar gemacht und ein vorbestehender Überhang in stabiler Datei-/Zeilenreihenfolge gekürzt. Retry ersetzt seinen Claim nur in-place und nur ohne Wachstum; bei Fehler bleibt das Original erhalten. Details und Producer-Migration: [`docs/ingress-security-and-retention.md`](docs/ingress-security-and-retention.md).
 
 ### Critical Consumer vs. Best-Effort
 Aktuelle geteilte Policy: Legacy `/events` behält Heimgeist als kritischen Kompatibilitätskonsumenten. V2 `/v1/events` nutzt Chronik als kritische Senke für operative Ledger-Ereignisse.
@@ -126,7 +137,11 @@ Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports 
 ## Security & Logging
 
 Plexer ist **Functionality-first** ausgelegt: Zustellung und Robustheit stehen im Vordergrund. Um Datenabfluss zu vermeiden, gelten dabei folgende Schutzmaßnahmen:
+- Beide schreibenden Ingress-Routen verlangen `Authorization: Bearer $PLEXER_TOKEN`; `X-Auth` wird dort nicht akzeptiert. Auth-Prüfung verwendet fixed-length constant-time comparison und läuft vor JSON-Parsing.
+- Standard-Bind ist `127.0.0.1`. Non-Loopback benötigt explizites `PLEXER_ALLOW_NON_LOOPBACK=true` und aktives Auth.
+- Rate-Limits und In-flight-Backpressure sind pro direkter Client-Adresse und global begrenzt; `429` ist mit `Retry-After` deterministisch retrybar.
 - Eingehende Event-Payloads werden nicht geloggt; geloggt werden nur Metadaten sowie `payload_size` und `payload_size_kind` (wenn berechenbar/sonst unavailable).
+- Tokens und Authorization-Header werden nie geloggt.
 - Fehlgeschlagene kritische Events werden lokal gepuffert (Queue-Datei im `dataDir`). Der Betrieb muss sicherstellen, dass dieses Verzeichnis geschützt ist (z. B. Dateirechte oder verschlüsseltes Volume).
 
 ## Observability

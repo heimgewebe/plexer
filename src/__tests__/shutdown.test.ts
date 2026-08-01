@@ -8,6 +8,7 @@ jest.mock('../config', () => ({
     port: 3000,
     host: '0.0.0.0',
     environment: 'test',
+    plexerToken: 'test-plexer-token',
     heimgeistUrl: 'http://heimgeist.local',
     dataDir: 'data',
   },
@@ -15,7 +16,7 @@ jest.mock('../config', () => ({
 
 // Mock delivery to avoid side effects
 jest.mock('../delivery', () => ({
-  saveFailedEvent: jest.fn().mockResolvedValue(undefined),
+  saveFailedEvent: jest.fn().mockResolvedValue({ status: 'persisted' }),
   getDeliveryMetrics: jest.fn(),
   retryFailedEvents: jest.fn().mockResolvedValue(undefined),
   validateEventEnvelope: jest.fn().mockReturnValue(true),
@@ -55,7 +56,7 @@ describe('Graceful Shutdown', () => {
     };
 
     // 1. Send a request that triggers a fetch
-    const response = await request(app).post('/events').send(payload);
+    const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
     expect(response.status).toBe(202);
     expect(fetchMock).toHaveBeenCalled();
 
@@ -90,7 +91,7 @@ describe('Graceful Shutdown', () => {
           payload: { foo: 'bar' },
       };
 
-      await request(app).post('/events').send(payload);
+      await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
 
       const startTime = Date.now();
       // Don't resolve the fetch

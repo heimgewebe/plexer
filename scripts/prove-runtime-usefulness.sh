@@ -169,6 +169,7 @@ if [[ "$RUNNER" == "docker" ]]; then
     exec docker run --rm --name "$CONTAINER_NAME" --network host \
       -e PORT="$PLEXER_PORT" \
       -e HOST=127.0.0.1 \
+      -e PLEXER_TOKEN="$TOKEN" \
       -e CHRONIK_URL="$CHRONIK_URL" \
       -e CHRONIK_TOKEN="$TOKEN" \
       -e PLEXER_DATA_DIR=/proof-data \
@@ -187,6 +188,7 @@ else
     exec env \
       PORT="$PLEXER_PORT" \
       HOST=127.0.0.1 \
+      PLEXER_TOKEN="$TOKEN" \
       CHRONIK_URL="$CHRONIK_URL" \
       CHRONIK_TOKEN="$TOKEN" \
       PLEXER_DATA_DIR="$PLEXER_DATA_DIR" \
@@ -245,6 +247,7 @@ PY
 
 send_code="$(curl -sS --max-time 5 -o "$SEND_RESPONSE_PATH" -w '%{http_code}' \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
   --data-binary "@$EVENT_PATH" \
   "$PLEXER_URL/v1/events")"
 if [[ "$send_code" != "202" ]]; then

@@ -37,8 +37,8 @@ role_contract:
 
 interfaces:
   consumes:
-    - "POST /events legacy envelope (type, source, payload)"
-    - "planned POST /v1/events operational events"
+    - "Authenticated POST /events legacy envelope (type, source, payload)"
+    - "Authenticated POST /v1/events operational events"
   produces:
     - "Critical delivery to Chronik agent.ledger"
     - "Observer fanout to Heimgeist, Leitstand and hausKI"
@@ -78,7 +78,7 @@ architecture:
     - path: "docs/migration/plexer-v2-execution-plan.md"
       purpose: "In-place rebuild sequence"
   data_flow:
-    input: "Legacy POST /events now; planned bounded POST /v1/events"
+    input: "Bearer-authenticated legacy POST /events and bounded POST /v1/events"
     processing: "Validation, Normalization, Allow-listing, Delivery Classification"
     output: "Critical Chronik delivery plus optional observer fanout"
 
