@@ -14,5 +14,7 @@ wgx:
 
     smoke: |
       set -euo pipefail
+      echo "[wgx.smoke] Installiere gepinnte Plexer-Abhängigkeiten (pnpm)"
+      pnpm install --frozen-lockfile
       echo "[wgx.smoke] TypeScript-Build für plexer (pnpm)"
       pnpm run build
