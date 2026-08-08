@@ -10,11 +10,11 @@ wgx:
       packageManager: pnpm
 
   tasks:
-    up: "pnpm install --frozen-lockfile"
+    up: "corepack pnpm install --frozen-lockfile"
 
     smoke: |
       set -euo pipefail
-      echo "[wgx.smoke] Installiere gepinnte Plexer-Abhängigkeiten (pnpm)"
-      pnpm install --frozen-lockfile
-      echo "[wgx.smoke] TypeScript-Build für plexer (pnpm)"
-      pnpm run build
+      echo "[wgx.smoke] Installiere gepinnte Plexer-Abhängigkeiten (Corepack/pnpm)"
+      corepack pnpm install --frozen-lockfile
+      echo "[wgx.smoke] TypeScript-Build für plexer (Corepack/pnpm)"
+      corepack pnpm run build
