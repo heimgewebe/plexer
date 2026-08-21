@@ -12,6 +12,16 @@ const LOCK_FILE = 'failed_forwards.lock';
 const ARCHIVE_PATTERN = /^processing\.[A-Za-z0-9-]+\.jsonl$/;
 const CLAIM_PATTERN = /^retrying\.[A-Za-z0-9-]+\.jsonl$/;
 const TEMP_PREFIX = 'failed_forwards.tmp.';
+const CLAIM_LEASE_STALE_MS = 10_000;
+const CLAIM_LEASE_UPDATE_MS = 2_000;
+const CLAIM_RECOVERY_SWEEP_LIMIT = 32;
+
+type ClaimLeaseRelease = () => Promise<void>;
+
+interface ClaimLease {
+  release: ClaimLeaseRelease;
+  compromised: boolean;
+}
 
 export interface StoreLimits {
   maxBytes: number;
@@ -166,7 +176,7 @@ export async function* readBoundedQueueLines(
 }
 
 export class FailedForwardStore {
-  private readonly claimed = new Set<string>();
+  private readonly claimed = new Map<string, ClaimLease>();
 
   constructor(private readonly getOptions: OptionsProvider) {}
 
@@ -197,6 +207,108 @@ export class FailedForwardStore {
       return await fn(options);
     } finally {
       await release();
+    }
+  }
+
+  private async acquireClaimLease(
+    filePath: string,
+    track: boolean,
+  ): Promise<ClaimLease | null> {
+    let lease: ClaimLease | undefined;
+    try {
+      const release = await lock(filePath, {
+        realpath: false,
+        stale: CLAIM_LEASE_STALE_MS,
+        update: CLAIM_LEASE_UPDATE_MS,
+        onCompromised: () => {
+          if (lease) lease.compromised = true;
+        },
+      });
+      lease = { release, compromised: false };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ELOCKED') return null;
+      throw error;
+    }
+    if (track) this.claimed.set(filePath, lease);
+    return lease;
+  }
+
+  private ownershipLost(error?: unknown): Error {
+    const result = new Error('Retry claim ownership lost');
+    if (error !== undefined) {
+      (result as Error & { cause?: unknown }).cause = error;
+    }
+    return result;
+  }
+
+  /** Must be called while the global queue lock is held. */
+  private async relinquishClaimLease(filePath: string): Promise<void> {
+    const lease = this.claimed.get(filePath);
+    if (!lease || lease.compromised) throw this.ownershipLost();
+    try {
+      await lease.release();
+      if (lease.compromised) throw this.ownershipLost();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        lease.compromised ||
+        code === 'ECOMPROMISED' ||
+        code === 'ERELEASED' ||
+        code === 'ENOTACQUIRED'
+      ) throw this.ownershipLost(error);
+      throw error;
+    } finally {
+      if (this.claimed.get(filePath) === lease) this.claimed.delete(filePath);
+    }
+  }
+
+  private async recoverOrphanedClaimsUnlocked(options: StoreOptions): Promise<void> {
+    const dataDir = path.resolve(options.dataDir);
+    const names = await fs.readdir(dataDir);
+    const candidateNames = new Set<string>();
+    for (const name of names) {
+      if (CLAIM_PATTERN.test(name)) {
+        candidateNames.add(name);
+      } else if (name.endsWith('.lock')) {
+        const claimName = name.slice(0, -'.lock'.length);
+        if (CLAIM_PATTERN.test(claimName)) candidateNames.add(claimName);
+      }
+    }
+
+    const candidates = await Promise.all([...candidateNames].map(async (name) => {
+      const claimPath = path.join(dataDir, name);
+      const [claimStat, leaseStat] = await Promise.all([
+        fs.stat(claimPath).catch(() => null),
+        fs.stat(`${claimPath}.lock`).catch(() => null),
+      ]);
+      return {
+        claimPath,
+        exists: claimStat !== null,
+        mtimeMs: leaseStat?.mtimeMs ?? claimStat?.mtimeMs ?? Number.POSITIVE_INFINITY,
+      };
+    }));
+    candidates.sort((a, b) => (
+      a.mtimeMs - b.mtimeMs || a.claimPath.localeCompare(b.claimPath)
+    ));
+
+    for (const candidate of candidates.slice(0, CLAIM_RECOVERY_SWEEP_LIMIT)) {
+      const lease = await this.acquireClaimLease(candidate.claimPath, false);
+      if (!lease) continue;
+      try {
+        await lease.release();
+        if (lease.compromised) continue;
+      } catch {
+        // A temporary recovery lease that cannot be cleanly relinquished is
+        // not proof that recovery is safe. Leave the candidate for a later sweep.
+        continue;
+      }
+      if (!candidate.exists) continue;
+      await fs.rename(
+        candidate.claimPath,
+        path.join(dataDir, `processing.${randomUUID()}.jsonl`),
+      ).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
     }
   }
 
@@ -303,22 +415,14 @@ export class FailedForwardStore {
       for (const name of await fs.readdir(dataDir)) {
         if (name.startsWith(TEMP_PREFIX)) {
           await fs.unlink(path.join(dataDir, name)).catch(() => undefined);
-        } else if (CLAIM_PATTERN.test(name)) {
-          const claimPath = path.join(dataDir, name);
-          if (this.claimed.has(claimPath)) continue;
-          // A retrying file at process initialization is a crash orphan. Make
-          // it claimable again without copying or merging its accepted records.
-          await fs.rename(
-            claimPath,
-            path.join(dataDir, `processing.${randomUUID()}.jsonl`),
-          );
         }
       }
+      await this.recoverOrphanedClaimsUnlocked(options);
       const files = await this.listDataFilesUnlocked(options);
       let claimedUsage: QueueUsage = { bytes: 0, entries: 0 };
       const compactableFiles: string[] = [];
       for (const filePath of files) {
-        if (!this.claimed.has(filePath)) {
+        if (!CLAIM_PATTERN.test(path.basename(filePath))) {
           compactableFiles.push(filePath);
           continue;
         }
@@ -342,7 +446,7 @@ export class FailedForwardStore {
       const active = this.activePath(options);
       const archives = files.filter((file) => file !== active);
       const claimedArchives = archives.filter((file) => (
-        this.claimed.has(file) || CLAIM_PATTERN.test(path.basename(file))
+        CLAIM_PATTERN.test(path.basename(file))
       ));
       const compactableFiles = [
         ...archives.filter((file) => !claimedArchives.includes(file)),
@@ -399,6 +503,7 @@ export class FailedForwardStore {
   /** Rotate the active file and claim the oldest archive for one retry run. */
   async claimNext(): Promise<QueueClaim | null> {
     return this.withLock(async (options) => {
+      await this.recoverOrphanedClaimsUnlocked(options);
       const active = this.activePath(options);
       const activeStat = await fs.stat(active).catch(() => null);
       if (activeStat && activeStat.size > 0) {
@@ -414,7 +519,6 @@ export class FailedForwardStore {
       for (const filePath of files) {
         if (
           filePath === active ||
-          this.claimed.has(filePath) ||
           !ARCHIVE_PATTERN.test(path.basename(filePath))
         ) continue;
         const claimedPath = path.join(
@@ -422,13 +526,31 @@ export class FailedForwardStore {
           `retrying.${randomUUID()}.jsonl`,
         );
         await fs.rename(filePath, claimedPath);
-        const usage = await this.inspectFile(claimedPath, options);
-        if (usage.bytes === 0) {
-          await fs.unlink(claimedPath).catch(() => undefined);
-          continue;
+        try {
+          const lease = await this.acquireClaimLease(claimedPath, true);
+          if (!lease) {
+            await fs.rename(claimedPath, filePath);
+            continue;
+          }
+          const usage = await this.inspectFile(claimedPath, options);
+          if (usage.bytes === 0) {
+            await this.relinquishClaimLease(claimedPath);
+            await fs.unlink(claimedPath).catch(() => undefined);
+            continue;
+          }
+          return { path: claimedPath, ...usage };
+        } catch (error) {
+          if (this.claimed.has(claimedPath)) {
+            try {
+              await this.relinquishClaimLease(claimedPath);
+              await fs.rename(claimedPath, filePath).catch(() => undefined);
+            } catch {
+              // Preserve the primary failure. If ownership was lost, mutating
+              // the claim as part of rollback would be unsafe.
+            }
+          }
+          throw error;
         }
-        this.claimed.add(claimedPath);
-        return { path: claimedPath, ...usage };
       }
       return null;
     });
@@ -439,18 +561,15 @@ export class FailedForwardStore {
   }
 
   async abandonClaim(claim: QueueClaim): Promise<void> {
-    try {
-      await this.withLock(async (options) => {
-        const stat = await fs.stat(claim.path).catch(() => null);
-        if (!stat) return;
-        await fs.rename(
-          claim.path,
-          path.join(path.resolve(options.dataDir), `processing.${randomUUID()}.jsonl`),
-        );
+    await this.withLock(async (options) => {
+      await this.relinquishClaimLease(claim.path);
+      await fs.rename(
+        claim.path,
+        path.join(path.resolve(options.dataDir), `processing.${randomUUID()}.jsonl`),
+      ).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
       });
-    } finally {
-      this.claimed.delete(claim.path);
-    }
+    });
   }
 
   /**
@@ -459,36 +578,33 @@ export class FailedForwardStore {
    * retry metadata growth.
    */
   async replaceClaim(claim: QueueClaim, lines: string[]): Promise<void> {
-    try {
-      const entries = lines.length;
-      const bytes = lines.reduce(
-        (sum, line) => sum + Buffer.byteLength(line, 'utf8'),
-        Math.max(0, lines.length - 1),
-      );
-      if (entries > claim.entries || bytes > claim.bytes) {
-        throw new Error('Retry replacement exceeds claimed archive bounds');
-      }
-      await this.withLock(async (options) => {
-        if (lines.length === 0) {
-          await fs.unlink(claim.path).catch((error: NodeJS.ErrnoException) => {
-            if (error.code !== 'ENOENT') throw error;
-          });
-        } else {
-          // No trailing newline avoids growing a legacy archive whose final
-          // record did not have one, while remaining valid JSONL.
-          await this.atomicRewrite(claim.path, lines, false);
-          await fs.rename(
-            claim.path,
-            path.join(
-              path.resolve(options.dataDir),
-              `processing.${randomUUID()}.jsonl`,
-            ),
-          );
-        }
-      });
-    } finally {
-      this.claimed.delete(claim.path);
+    const entries = lines.length;
+    const bytes = lines.reduce(
+      (sum, line) => sum + Buffer.byteLength(line, 'utf8'),
+      Math.max(0, lines.length - 1),
+    );
+    if (entries > claim.entries || bytes > claim.bytes) {
+      throw new Error('Retry replacement exceeds claimed archive bounds');
     }
+    await this.withLock(async (options) => {
+      await this.relinquishClaimLease(claim.path);
+      if (lines.length === 0) {
+        await fs.unlink(claim.path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+        });
+      } else {
+        // No trailing newline avoids growing a legacy archive whose final
+        // record did not have one, while remaining valid JSONL.
+        await this.atomicRewrite(claim.path, lines, false);
+        await fs.rename(
+          claim.path,
+          path.join(
+            path.resolve(options.dataDir),
+            `processing.${randomUUID()}.jsonl`,
+          ),
+        );
+      }
+    });
   }
 
   /** Locked scan across the live active file and every retry archive. */
