@@ -277,6 +277,30 @@ describe('Delivery reliability orchestration', () => {
     );
   });
 
+  it('contains cleanup failure after replacement already lost the claim lease', async () => {
+    const entry = makeEntry({ nextAttempt: new Date(Date.now() + 60_000).toISOString() });
+    const line = queueLine(entry);
+    const claim = { path: '/queue/processing.cleanup.jsonl', bytes: line.bytes, entries: 1 };
+    const replaceError = new Error('disk failure');
+    const cleanupError = new Error('Retry claim ownership lost');
+    store.claimNext.mockResolvedValueOnce(claim);
+    store.readClaim.mockImplementationOnce(() => lines(line));
+    store.replaceClaim.mockRejectedValueOnce(replaceError);
+    store.abandonClaim.mockRejectedValueOnce(cleanupError);
+
+    await expect(retryFailedEvents()).resolves.toBeUndefined();
+
+    expect(store.abandonClaim).toHaveBeenCalledWith(claim);
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: replaceError },
+      expect.stringContaining('Error processing failed events'),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      { err: cleanupError },
+      expect.stringContaining('Failed to abandon retry claim'),
+    );
+  });
+
   it('retries Chronik ledger entries through the critical delivery path', async () => {
     const entry = makeEntry({
       consumerKey: 'chronik-agent-ledger',
