@@ -625,10 +625,19 @@ async function runRetryFailedEvents(): Promise<void> {
       if (scan) applyQueueScan(scan);
     });
   } catch (err) {
-    if (claim) await failedForwardStore.abandonClaim(claim);
     logger.error({ err }, '[Reliability] Error processing failed events');
-    // A failed replacement intentionally leaves the archive untouched. It will
-    // be retried after restart or on the next run; no accepted record is lost.
+    if (claim) {
+      try {
+        await failedForwardStore.abandonClaim(claim);
+      } catch (cleanupErr) {
+        logger.warn(
+          { err: cleanupErr },
+          '[Reliability] Failed to abandon retry claim after processing error',
+        );
+      }
+    }
+    // A failed replacement preserves accepted records. Cleanup either requeues
+    // the intact claim or leaves it untouched when ownership is unavailable.
   }
 }
 
