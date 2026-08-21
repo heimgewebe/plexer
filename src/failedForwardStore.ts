@@ -304,16 +304,31 @@ export class FailedForwardStore {
         if (name.startsWith(TEMP_PREFIX)) {
           await fs.unlink(path.join(dataDir, name)).catch(() => undefined);
         } else if (CLAIM_PATTERN.test(name)) {
+          const claimPath = path.join(dataDir, name);
+          if (this.claimed.has(claimPath)) continue;
           // A retrying file at process initialization is a crash orphan. Make
           // it claimable again without copying or merging its accepted records.
           await fs.rename(
-            path.join(dataDir, name),
+            claimPath,
             path.join(dataDir, `processing.${randomUUID()}.jsonl`),
           );
         }
       }
       const files = await this.listDataFilesUnlocked(options);
-      return this.compactFilesUnlocked(files, options);
+      let claimedUsage: QueueUsage = { bytes: 0, entries: 0 };
+      const compactableFiles: string[] = [];
+      for (const filePath of files) {
+        if (!this.claimed.has(filePath)) {
+          compactableFiles.push(filePath);
+          continue;
+        }
+        const usage = await this.inspectFile(filePath, options);
+        claimedUsage = {
+          bytes: claimedUsage.bytes + usage.bytes,
+          entries: claimedUsage.entries + usage.entries,
+        };
+      }
+      return this.compactFilesUnlocked(compactableFiles, options, claimedUsage);
     });
   }
 

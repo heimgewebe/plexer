@@ -171,4 +171,22 @@ describe('FailedForwardStore hard retention (real fs)', () => {
     expect(recoveredEntries).toHaveLength(1);
     expect(recoveredEntries[0].event.payload).toEqual({ id: 'restart-claim' });
   });
+
+  it('does not orphan or duplicate a live claim when initialization repeats', async () => {
+    const store = storeFor(dir);
+    await store.initialize();
+    await store.append([makeEntry('live-claim')]);
+    const claim = await store.claimNext();
+    expect(claim).not.toBeNull();
+    const claimedLines: string[] = [];
+    for await (const line of store.readClaim(claim!)) {
+      if (line.raw) claimedLines.push(line.raw);
+    }
+
+    await store.initialize();
+    await store.replaceClaim(claim!, claimedLines);
+
+    const { entries } = await scanEntries(store);
+    expect(entries.map((entry) => entry.event.payload)).toEqual([{ id: 'live-claim' }]);
+  });
 });
