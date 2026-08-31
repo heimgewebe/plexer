@@ -41,7 +41,7 @@ interfaces:
     - "Authenticated POST /v1/events operational events"
   produces:
     - "Critical delivery to Chronik agent.ledger"
-    - "Observer fanout to Heimgeist, Leitstand and hausKI"
+    - "Best-effort observer fanout to Leitstand and hausKI"
 
 contracts:
   schemas:
@@ -53,13 +53,10 @@ dependencies:
     - name: chronik
       relationship: critical_sink
       interface: ["POST /v1/ingest?domain=agent.ledger"]
-    - name: heimgeist
-      relationship: observer_or_analyzer
-      interface: [events]
     - name: leitstand
       relationship: observer
       interface: [events]
-    - name: hausKI
+    - name: hauski
       relationship: observer_or_consumer
       interface: [events]
   external:
@@ -80,7 +77,7 @@ architecture:
   data_flow:
     input: "Bearer-authenticated legacy POST /events and bounded POST /v1/events"
     processing: "Validation, Normalization, Allow-listing, Delivery Classification"
-    output: "Critical Chronik delivery plus optional observer fanout"
+    output: "Critical Chronik delivery plus optional active observer fanout"
 
 boundaries:
   not_responsible_for:
@@ -94,6 +91,7 @@ boundaries:
   dangerous_assumptions:
     - "Assuming observer fanout is audit-safe"
     - "Treating Plexer as the source of truth instead of Chronik"
+    - "Treating retired Heimgeist compatibility fields as an active consumer path"
     - "Adding broad event families before agent.run.* proves useful"
 
 conventions:
@@ -111,8 +109,9 @@ ai_guidance:
     - "Keep Plexer as gateway and delivery relay, not an orchestrator."
     - "Prefer Chronik as the critical append-only sink for operational ledger events."
     - "Keep first-slice operational events small and allow-listed."
-    - "Preserve legacy /events compatibility while introducing v2 paths."
+    - "Treat Heimgeist forwarding as retired; legacy fields exist only for parse and historical retry compatibility."
   dont:
     - "Store long logs, full prompts, copied evidence bodies or broad nested payloads in Plexer events."
     - "Add PR, review, Bureau claim or bundle event families before agent.run.* has proven useful."
     - "Make Grabowski or Bureau execution depend on Plexer availability."
+    - "Re-enable Heimgeist fanout through HEIMGEIST_URL or a new runtime toggle."

@@ -10,6 +10,7 @@ export interface Config {
   ingressPerClientMaxInFlight: number;
   ingressGlobalMaxInFlight: number;
   ingressMaxClients: number;
+  legacyHeimgeistForwarding: boolean;
   heimgeistUrl?: string;
   leitstandUrl?: string;
   hauskiUrl?: string;
@@ -221,6 +222,10 @@ export const config: Config = {
   ingressPerClientMaxInFlight,
   ingressGlobalMaxInFlight,
   ingressMaxClients,
+  // Hard cut: the legacy Heimgeist observer is retired and cannot be re-enabled
+  // through environment configuration. Fields below remain readable only so old
+  // config/test fixtures and historical retry records stay parse-compatible.
+  legacyHeimgeistForwarding: false,
   heimgeistUrl,
   leitstandUrl,
   hauskiUrl,
