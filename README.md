@@ -2,22 +2,25 @@
 
 ## Operator ecosystem correction
 
-Plexer is the event gateway and delivery relay for bounded operational events in the new operator ecosystem. Target v2 doctrine: Chronik is the critical append-only sink for operational ledger events; Bureau owns tasks and claims; Grabowski owns local execution and receipts; Leitstand, Heimgeist and hausKI are observers or consumers. Legacy `/events` may still route unknown events to Heimgeist during migration; that is compatibility behavior, not the target architecture. Plexer is also not the only communication path.
+Plexer is the event gateway and delivery relay for bounded operational events in the new operator ecosystem. Chronik is the critical append-only sink for operational ledger events; Bureau owns tasks and claims; Grabowski owns local execution and receipts; Leitstand and hausKI are optional observers or consumers. The former Heimgeist fanout is retired: legacy Heimgeist configuration fields remain parse-compatible, but the runtime hard-disables that consumer and does not create new Heimgeist delivery attempts. Plexer is also not the only communication path.
 
 Plexer ist das Event Gateway und Delivery Relay für begrenzte operative Ereignisse im Heimgewebe-Operator-Ökosystem.
 
 - Nimmt Events über `POST /events` im Heimgewebe-Format entgegen
 - Prüft Minimalstruktur (`type`, `source`, `payload`; `type`/`source` max. 256 Zeichen)
 - Loggt eingehende Events
-- Leitet sie an Heimgeist und weitere konfigurierte Konsumenten (Chronik, Leitstand, hausKI) weiter
+- Leitet erlaubte Legacy-Broadcasts best-effort an aktive konfigurierte Konsumenten weiter
+- Liefert `agent.run.*` über `/v1/events` kritisch an Chronik `agent.ledger`
+- Leitet **keine neuen Events mehr an Heimgeist** weiter
 
 ## Plexer v2 Richtung
 
-Plexer wird in Richtung **Event Gateway und Delivery Relay** neu zugeschnitten. Der bestehende Router bleibt während der Migration kompatibel, aber die Zielrolle ändert sich:
+Plexer wird als **Event Gateway und Delivery Relay** betrieben. Der Legacy-Endpunkt `/events` bleibt für kompatible Producer erhalten; die frühere Heimgeist-Sonderrolle ist jedoch beendet:
 
 - Chronik ist die kritische append-only Senke für operative Ledger-Ereignisse.
 - Plexer validiert, klassifiziert, queued und liefert aus.
-- Heimgeist, Leitstand und hausKI sind Beobachter- oder Analyseflächen, nicht die primäre Wahrheit.
+- Leitstand und hausKI können Beobachter- oder Analyseflächen sein, nicht die primäre Wahrheit.
+- Heimgeist ist kein aktiver Plexer-Consumer mehr.
 - Grabowski und Bureau dürfen nicht von Plexer-Verfügbarkeit abhängen.
 - Der erste v2-Scope bleibt bewusst klein: `agent.run.started`, `agent.run.completed`, `agent.run.blocked`.
 
@@ -34,11 +37,13 @@ Plexer tut:
 - Events entgegennehmen (`POST /events`)
 - Minimalstruktur prüfen
 - Events protokollieren
-- Events an Konsumenten weiterreichen (Fanout-Pattern)
-- Legacy `/events`: fehlgeschlagene Weiterleitungen an **Heimgeist** zwischenpuffern und wiederholen. V2 `/v1/events`: Chronik ist die kritische Senke.
+- erlaubte Broadcast-Events an aktive Legacy-Konsumenten weiterreichen
+- `/v1/events`: Chronik als kritische Senke nutzen und fehlgeschlagene `agent.ledger`-Zustellungen persistent retrybar halten
+- historische Retry-Dateien weiterhin parse-kompatibel lesen
 
 Plexer tut **nicht**:
 
+- neue Heimgeist-Zustellungen oder Heimgeist-Retry-Einträge erzeugen
 - PR-Kommentare entgegennehmen
 - PR-Kommandos parsen
 - mit der GitHub-API sprechen
@@ -99,36 +104,35 @@ Alle URL-Variablen müssen vollqualifiziert sein (inkl. Schema `https://…`).
 
 | Service | URL Variable | Token Variable | Auth Methode |
 |---------|--------------|----------------|--------------|
-| **Heimgeist** | `HEIMGEIST_URL` | `HEIMGEIST_TOKEN` | `X-Auth: <token>` |
 | **Chronik** | `CHRONIK_URL` | `CHRONIK_TOKEN` | `X-Auth: <token>` |
 | **Leitstand** | `LEITSTAND_URL` | `LEITSTAND_TOKEN` | `Authorization: Bearer <token>` |
 | **hausKI** | `HAUSKI_URL` | `HAUSKI_TOKEN` | `Authorization: Bearer <token>` |
 
-Plexer wendet automatisch den korrekten Auth-Header je nach Zielsystem an.
+`HEIMGEIST_URL` und `HEIMGEIST_TOKEN` werden aus Kompatibilitätsgründen noch geparst, besitzen aber **keine Aktivierungswirkung**. Die Runtime setzt `legacyHeimgeistForwarding` hart auf `false`; es existiert absichtlich kein Environment-Schalter zum Wiedereinschalten.
+
+Plexer wendet automatisch den korrekten Auth-Header je nach aktivem Zielsystem an.
 
 ## Reliability & Contracts
 
 ### Persistence & Queue
-Plexer nutzt eine persistente, dateibasierte Queue (`failed_forwards.jsonl`), erstklassige Retry-Archive (`processing.*.jsonl`) und atomar geclaimte `retrying.*.jsonl`-Dateien, um Events auch bei temporären Ausfällen der Konsumenten zuzustellen. Byte-, Eintrags- und Altersgrenzen gelten atomar über aktive Datei, Archive und Claims. Bestehende Retry-Daten haben Vorrang; neue Einträge werden an der exakten Quota-Grenze explizit abgelehnt. Beim Start werden korrupte/abgelaufene Zeilen entfernt, Crash-Claims wieder retrybar gemacht und ein vorbestehender Überhang in stabiler Datei-/Zeilenreihenfolge gekürzt. Retry ersetzt seinen Claim nur in-place und nur ohne Wachstum; bei Fehler bleibt das Original erhalten. Details und Producer-Migration: [`docs/ingress-security-and-retention.md`](docs/ingress-security-and-retention.md).
+Plexer nutzt eine persistente, dateibasierte Queue (`failed_forwards.jsonl`), erstklassige Retry-Archive (`processing.*.jsonl`) und atomar geclaimte `retrying.*.jsonl`-Dateien, um Events auch bei temporären Ausfällen kritischer Ziele zuzustellen. Byte-, Eintrags- und Altersgrenzen gelten atomar über aktive Datei, Archive und Claims. Bestehende Retry-Daten haben Vorrang; neue Einträge werden an der exakten Quota-Grenze explizit abgelehnt. Beim Start werden korrupte/abgelaufene Zeilen entfernt, Crash-Claims wieder retrybar gemacht und ein vorbestehender Überhang in stabiler Datei-/Zeilenreihenfolge gekürzt. Retry ersetzt seinen Claim nur in-place und nur ohne Wachstum; bei Fehler bleibt das Original erhalten. Historische Heimgeist-Einträge dürfen für Recovery/Inspektion parse-kompatibel bleiben; der Live-Fanout erzeugt keine neuen. Details und Producer-Migration: [`docs/ingress-security-and-retention.md`](docs/ingress-security-and-retention.md).
 
 ### Critical Consumer vs. Best-Effort
-Aktuelle geteilte Policy: Legacy `/events` behält Heimgeist als kritischen Kompatibilitätskonsumenten. V2 `/v1/events` nutzt Chronik als kritische Senke für operative Ledger-Ereignisse.
+Aktuelle Policy: `/v1/events` nutzt Chronik als kritische Senke für operative Ledger-Ereignisse. Der frühere kritische Heimgeist-Kompatibilitätsconsumer von `/events` ist hart deaktiviert.
 
-Die Unterscheidung erfolgt primär anhand des Konsumenten und sekundär per Event-Override:
+1. **Chronik (`/v1/events`)**:
+   - Kritische Senke für `agent.ledger`.
+   - Retrybare Zustellfehler werden persistent gequeued.
 
-1. **Heimgeist (Legacy Critical Consumer für `/events`)**:
-   - Zielsystem für persistente Datenhaltung.
-   - Events, die an Heimgeist nicht zugestellt werden können, werden **gequeued** und via Exponential Backoff wiederholt.
-   - Ausnahme: Events in `BEST_EFFORT_EVENTS` (z.B. `integrity.summary.published.v1`) werden auch für Heimgeist nicht gequeued.
+2. **Legacy-Broadcast-Konsumenten (`/events`)**:
+   - Leitstand, hausKI und Chronik werden nur für explizite Broadcast-Eventtypen berücksichtigt.
+   - Fehlschläge werden geloggt, aber **nicht** als Heimgeist-Kompatibilitätsqueue fortgeschrieben.
+   - Unbekannte Legacy-Eventtypen haben nach dem Heimgeist-Cutover keinen impliziten Auffangkonsumenten mehr.
 
-2. **Andere Legacy-Konsumenten (Leitstand, hausKI, Chronik)**:
-   - **Fire-and-Forget / Best-Effort**.
-   - Fehlschläge werden geloggt (als Warning), aber **niemals gequeued**.
-   - Dies verhindert, dass ein einzelner langsamer Konsument den Plexer blockiert oder die Queue füllt.
-
-3. **Best-Effort Events Override**:
-   - Events wie `integrity.summary.published.v1` (Pull-based hints) oder `plexer.delivery.report.v1` (Ephemeral Status) sind in `BEST_EFFORT_EVENTS` definiert.
-   - Diese werden **niemals** gequeued, auch nicht für Heimgeist.
+3. **Heimgeist**:
+   - Kein aktiver Consumer.
+   - `HEIMGEIST_URL`/`HEIMGEIST_TOKEN` können die Zustellung nicht reaktivieren.
+   - Bestehende historische Queue-Daten bleiben lesbar, bis sie regulär terminalisiert oder bereinigt werden.
 
 ### Contracts Ownership
 Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports liegen in `src/vendor/schemas/`.
