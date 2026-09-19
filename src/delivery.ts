@@ -28,6 +28,7 @@ let retryableNowCount = 0;
 let nextDueAt: string | null = null;
 
 const CHRONIK_AGENT_LEDGER_CONSUMER_KEY = 'chronik-agent-ledger';
+const RETIRED_CONSUMER_KEYS = new Set(['heimgeist', 'hauski']);
 
 // Critical-sink (Chronik agent.ledger) diagnostics — a strict subset of the queue.
 // Internal observability only; NOT part of the plexer.delivery.report.v1 contract
@@ -492,6 +493,17 @@ async function runRetryFailedEvents(): Promise<void> {
               );
 
               return entry;
+            }
+
+            if (RETIRED_CONSUMER_KEYS.has(entry.consumerKey)) {
+              logger.warn(
+                {
+                  consumerKey: entry.consumerKey,
+                  eventType: entry.event.type,
+                },
+                '[Retry] Dropping failed event for retired consumer',
+              );
+              return null;
             }
 
             const consumer = CONSUMERS.find((c) => c.key === entry.consumerKey);

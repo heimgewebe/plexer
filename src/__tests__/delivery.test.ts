@@ -119,6 +119,27 @@ describe('Delivery reliability orchestration', () => {
     });
   });
 
+  it.each(['heimgeist', 'hauski'])(
+    'terminally drops a persisted retry for retired consumer %s',
+    async (consumerKey) => {
+      const retired = makeEntry({ consumerKey });
+      const line = queueLine(retired);
+      const claim = { path: '/queue/processing.retired.jsonl', bytes: line.bytes, entries: 1 };
+
+      store.claimNext.mockResolvedValueOnce(claim);
+      store.readClaim.mockImplementationOnce(() => lines(line));
+
+      await retryFailedEvents();
+
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(store.replaceClaim).toHaveBeenCalledWith(claim, []);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ consumerKey, eventType: retired.event.type }),
+        expect.stringContaining('retired consumer'),
+      );
+    },
+  );
+
   it('returns an explicit quota rejection instead of claiming persistence', async () => {
     store.append.mockResolvedValueOnce([{ status: 'rejected', reason: 'quota' }]);
     const result = await saveFailedEvent(

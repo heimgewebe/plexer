@@ -89,3 +89,6 @@ Configuration variables:
 | `FAILED_FORWARDS_MAX_BYTES` | `16777216` |
 | `FAILED_FORWARDS_MAX_ENTRIES` | `10000` |
 | `FAILED_FORWARDS_MAX_AGE_MS` | `604800000` |
+## Deleted-consumer retry closeout
+
+Heimgeist and hausKI are retired delivery targets. Legacy queue records remain parse-compatible so old bytes can be inspected safely, but retry processing terminally drops records whose `consumerKey` is `heimgeist` or `hauski`; it never performs a network delivery for them and never requeues them as a missing live consumer.

@@ -6,7 +6,6 @@ import { PlexerEvent } from './types';
 import {
   BROADCAST_EVENTS,
   EVENT_INSIGHTS_DAILY_PUBLISHED,
-  BEST_EFFORT_EVENTS,
   HTTP_REQUEST_TIMEOUT_MS,
 } from './constants';
 import { CONSUMERS } from './consumers';
@@ -15,7 +14,6 @@ import { logger } from './logger';
 // NOTE: p-limit v3 is used because it supports CommonJS. v4+ is ESM-only.
 import pLimit from 'p-limit';
 import {
-  saveFailedEvent,
   getDeliveryMetrics,
   getCriticalSinkReadiness,
   validateDeliveryReport,
@@ -226,11 +224,8 @@ function getPayloadSizeBytes(payloadJson: string): number {
   return Buffer.byteLength(payloadJson, 'utf8');
 }
 
-function shouldForward(eventType: string, consumerKey: string): boolean {
-  if (BROADCAST_EVENTS.has(eventType)) {
-    return true;
-  }
-  return consumerKey === 'heimgeist';
+function shouldForward(eventType: string): boolean {
+  return BROADCAST_EVENTS.has(eventType);
 }
 
 export function getPendingRequestCount(): number {
@@ -574,24 +569,15 @@ async function handleForwardFailure(
   source: string,
   payload: unknown,
 ): Promise<void> {
-  // Reliability Policy:
-  // - Heimgeist: Critical push -> Queue on failure
-  // - Others (Chronik, Leitstand, hausKI): Best-effort notification -> Log warn on failure
-  // - BEST_EFFORT_EVENTS override: Always warn, never queue
-  const isCriticalConsumer = key === 'heimgeist';
-  const isBestEffortEvent = BEST_EFFORT_EVENTS.has(type);
-
-  if (isBestEffortEvent || !isCriticalConsumer) {
-    context.log_kind = 'best_effort_forward_failed';
-    logger.warn(context, `[Best-Effort] ${errorMessage}`);
-  } else {
-    await saveFailedEvent(
-      { type, source, payload },
-      key,
-      errorMessage,
-    ).catch((e) => logger.error({ err: e }, 'Failed to save failed event'));
-    logger.error(context, errorMessage);
-  }
+  // Legacy /events fanout is notification-only. Critical persistence belongs
+  // exclusively to the Chronik /v1/events path. Deleted consumers (Heimgeist
+  // and hausKI) are no longer in CONSUMERS, so this path never creates retry
+  // records for them.
+  void key;
+  void source;
+  void payload;
+  context.log_kind = 'best_effort_forward_failed';
+  logger.warn(context, `[Best-Effort] ${errorMessage}`);
 }
 
 export async function processEvent(event: PlexerEvent): Promise<void> {
@@ -654,7 +640,7 @@ export async function processEvent(event: PlexerEvent): Promise<void> {
   CONSUMERS.forEach(({ key, label, url, token, authKind }) => {
     if (!url) return;
 
-    if (!shouldForward(type, key)) {
+    if (!shouldForward(type)) {
       return;
     }
 
