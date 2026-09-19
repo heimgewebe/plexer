@@ -1,4 +1,4 @@
-describe('Heimgeist consumer decommission', () => {
+describe('Deleted consumer decommission', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
@@ -17,25 +17,24 @@ describe('Heimgeist consumer decommission', () => {
     jest.resetModules();
   });
 
-  it('does not activate Heimgeist even when legacy URL and token are configured', () => {
+  it('never activates Heimgeist or hausKI from legacy environment configuration', () => {
     process.env.HEIMGEIST_URL = 'https://heimgeist.example.com/events';
-    process.env.HEIMGEIST_TOKEN = 'legacy-token';
+    process.env.HEIMGEIST_TOKEN = 'legacy-heimgeist-token';
+    process.env.HAUSKI_URL = 'https://hauski.example.com/events';
+    process.env.HAUSKI_TOKEN = 'legacy-hauski-token';
 
     jest.isolateModules(() => {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { config } = require('../config');
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { CONSUMERS } = require('../consumers');
 
       expect(config.legacyHeimgeistForwarding).toBe(false);
       expect(config.heimgeistUrl).toBe('https://heimgeist.example.com/events');
+      expect(config.hauskiUrl).toBe('https://hauski.example.com/events');
 
-      const heimgeist = CONSUMERS.find(
-        (consumer: { key: string }) => consumer.key === 'heimgeist',
-      );
-      expect(heimgeist).toBeDefined();
-      expect(heimgeist.url).toBeUndefined();
-      expect(heimgeist.token).toBeUndefined();
+      const keys = CONSUMERS.map((consumer: { key: string }) => consumer.key);
+      expect(keys).not.toContain('heimgeist');
+      expect(keys).not.toContain('hauski');
+      expect(keys).toEqual(['leitstand', 'chronik']);
     });
   });
 });

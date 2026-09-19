@@ -41,7 +41,7 @@ interfaces:
     - "Authenticated POST /v1/events operational events"
   produces:
     - "Critical delivery to Chronik agent.ledger"
-    - "Best-effort observer fanout to Leitstand and hausKI"
+    - "Best-effort observer fanout to surviving configured consumers (currently Leitstand and Chronik)"
 
 contracts:
   schemas:
@@ -55,9 +55,6 @@ dependencies:
       interface: ["POST /v1/ingest?domain=agent.ledger"]
     - name: leitstand
       relationship: observer
-      interface: [events]
-    - name: hauski
-      relationship: observer_or_consumer
       interface: [events]
   external:
     - name: node
@@ -109,9 +106,9 @@ ai_guidance:
     - "Keep Plexer as gateway and delivery relay, not an orchestrator."
     - "Prefer Chronik as the critical append-only sink for operational ledger events."
     - "Keep first-slice operational events small and allow-listed."
-    - "Treat Heimgeist forwarding as retired; legacy fields exist only for parse and historical retry compatibility."
+    - "Treat Heimgeist and hausKI forwarding as retired; legacy fields exist only for parse and historical retry compatibility."
   dont:
     - "Store long logs, full prompts, copied evidence bodies or broad nested payloads in Plexer events."
     - "Add PR, review, Bureau claim or bundle event families before agent.run.* has proven useful."
     - "Make Grabowski or Bureau execution depend on Plexer availability."
-    - "Re-enable Heimgeist fanout through HEIMGEIST_URL or a new runtime toggle."
+    - "Re-enable Heimgeist or hausKI fanout through legacy URL/token fields or a new runtime toggle."

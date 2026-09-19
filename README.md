@@ -2,7 +2,7 @@
 
 ## Operator ecosystem correction
 
-Plexer is the event gateway and delivery relay for bounded operational events in the new operator ecosystem. Chronik is the critical append-only sink for operational ledger events; Bureau owns tasks and claims; Grabowski owns local execution and receipts; Leitstand and hausKI are optional observers or consumers. The former Heimgeist fanout is retired: legacy Heimgeist configuration fields remain parse-compatible, but the runtime hard-disables that consumer and does not create new Heimgeist delivery attempts. Plexer is also not the only communication path.
+Plexer is the event gateway and delivery relay for bounded operational events in the new operator ecosystem. Chronik is the critical append-only sink for operational ledger events; Bureau owns tasks and claims; Grabowski owns local execution and receipts; Leitstand is the surviving optional observer. The former Heimgeist and hausKI fanout targets are retired: their legacy configuration fields remain parse-compatible, but neither can become a live consumer or create new delivery attempts. Plexer is also not the only communication path.
 
 Plexer ist das Event Gateway und Delivery Relay für begrenzte operative Ereignisse im Heimgewebe-Operator-Ökosystem.
 
@@ -19,8 +19,8 @@ Plexer wird als **Event Gateway und Delivery Relay** betrieben. Der Legacy-Endpu
 
 - Chronik ist die kritische append-only Senke für operative Ledger-Ereignisse.
 - Plexer validiert, klassifiziert, queued und liefert aus.
-- Leitstand und hausKI können Beobachter- oder Analyseflächen sein, nicht die primäre Wahrheit.
-- Heimgeist ist kein aktiver Plexer-Consumer mehr.
+- Leitstand bleibt die optionale Beobachterfläche.
+- Heimgeist und hausKI sind keine aktiven Plexer-Consumer mehr.
 - Grabowski und Bureau dürfen nicht von Plexer-Verfügbarkeit abhängen.
 - Der erste v2-Scope bleibt bewusst klein: `agent.run.started`, `agent.run.completed`, `agent.run.blocked`.
 
@@ -106,9 +106,7 @@ Alle URL-Variablen müssen vollqualifiziert sein (inkl. Schema `https://…`).
 |---------|--------------|----------------|--------------|
 | **Chronik** | `CHRONIK_URL` | `CHRONIK_TOKEN` | `X-Auth: <token>` |
 | **Leitstand** | `LEITSTAND_URL` | `LEITSTAND_TOKEN` | `Authorization: Bearer <token>` |
-| **hausKI** | `HAUSKI_URL` | `HAUSKI_TOKEN` | `Authorization: Bearer <token>` |
-
-`HEIMGEIST_URL` und `HEIMGEIST_TOKEN` werden aus Kompatibilitätsgründen noch geparst, besitzen aber **keine Aktivierungswirkung**. Die Runtime setzt `legacyHeimgeistForwarding` hart auf `false`; es existiert absichtlich kein Environment-Schalter zum Wiedereinschalten.
+`HEIMGEIST_URL` / `HEIMGEIST_TOKEN` sowie `HAUSKI_URL` / `HAUSKI_TOKEN` werden ausschließlich aus historischer Parse-Kompatibilität noch akzeptiert. **Keine dieser Variablen kann einen Consumer aktivieren.** Die Zielmenge des Legacy-Fanouts enthält nur noch überlebende Consumer.
 
 Plexer wendet automatisch den korrekten Auth-Header je nach aktivem Zielsystem an.
 
@@ -125,14 +123,14 @@ Aktuelle Policy: `/v1/events` nutzt Chronik als kritische Senke für operative L
    - Retrybare Zustellfehler werden persistent gequeued.
 
 2. **Legacy-Broadcast-Konsumenten (`/events`)**:
-   - Leitstand, hausKI und Chronik werden nur für explizite Broadcast-Eventtypen berücksichtigt.
+   - Leitstand und Chronik werden nur für explizite Broadcast-Eventtypen berücksichtigt.
    - Fehlschläge werden geloggt, aber **nicht** als Heimgeist-Kompatibilitätsqueue fortgeschrieben.
    - Unbekannte Legacy-Eventtypen haben nach dem Heimgeist-Cutover keinen impliziten Auffangkonsumenten mehr.
 
-3. **Heimgeist**:
-   - Kein aktiver Consumer.
-   - `HEIMGEIST_URL`/`HEIMGEIST_TOKEN` können die Zustellung nicht reaktivieren.
-   - Bestehende historische Queue-Daten bleiben lesbar, bis sie regulär terminalisiert oder bereinigt werden.
+3. **Retired Consumer (Heimgeist / hausKI)**:
+   - Keine aktiven Consumer.
+   - Legacy-URL-/Token-Felder können die Zustellung nicht reaktivieren.
+   - Bestehende historische Queue-Daten bleiben parse-kompatibel; Retry-Einträge für diese Consumer werden terminal verworfen statt erneut zugestellt.
 
 ### Contracts Ownership
 Die verwendeten Schemas zur Validierung von Queue-Einträgen und Status-Reports liegen in `src/vendor/schemas/`.

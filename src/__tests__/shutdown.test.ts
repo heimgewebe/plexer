@@ -9,7 +9,8 @@ jest.mock('../config', () => ({
     host: '0.0.0.0',
     environment: 'test',
     plexerToken: 'test-plexer-token',
-    heimgeistUrl: 'http://heimgeist.local',
+    leitstandUrl: 'http://leitstand.local',
+    leitstandToken: 'leitstand-secret-token',
     dataDir: 'data',
   },
 }));
@@ -50,7 +51,7 @@ describe('Graceful Shutdown', () => {
 
   it('should wait for pending requests to drain', async () => {
     const payload = {
-      type: 'test.event',
+      type: 'knowledge.observatory.published.v1',
       source: 'test-suite',
       payload: { foo: 'bar' },
     };
@@ -86,7 +87,7 @@ describe('Graceful Shutdown', () => {
 
   it('should timeout if pending requests take too long', async () => {
       const payload = {
-          type: 'test.event',
+          type: 'knowledge.observatory.published.v1',
           source: 'test-suite',
           payload: { foo: 'bar' },
       };

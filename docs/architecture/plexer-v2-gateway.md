@@ -20,7 +20,7 @@ Plexer v2 does:
 - validate envelope shape and size limits;
 - apply outbound allow-list rules;
 - queue critical delivery to Chronik when Chronik is unavailable;
-- fan out non-critical observer notifications to Heimgeist, Leitstand and hausKI;
+- fan out non-critical observer notifications only to surviving configured observers; Heimgeist and hausKI are retired targets;
 - expose bounded delivery status;
 - keep legacy `/events` support during migration.
 
@@ -43,8 +43,7 @@ Plexer v2 does not:
 | Grabowski | Local operator, runtime leases, durable receipts and audit | execution must stay safe without Plexer |
 | Bureau | Commitments, tasks, claims, dispatch and completion | not an event bus |
 | Leitstand | Views, digests and dashboards | not a primary store |
-| Heimgeist | Analysis and meta-agent interpretation | not the audit sink |
-| hausKI | AI consumer and assistant surface | not a gatekeeper |
+| Heimgeist / hausKI (historical) | retired former observer targets | no current consumer or routing authority |
 
 ## Delivery doctrine
 
@@ -55,8 +54,8 @@ Initial delivery classes:
 | Class | Example | Critical sink | Observer sinks | Failure behavior |
 | --- | --- | --- | --- | --- |
 | operational-ledger | `agent.run.completed` | Chronik `agent.ledger` | optional | queue and retry Chronik |
-| status-signal | `plexer.delivery.report.v1` | none or Chronik later | Leitstand/Heimgeist | best-effort |
-| legacy-router | old `{type, source, payload}` events | existing behavior during migration | existing behavior | preserve compatibility |
+| status-signal | `plexer.delivery.report.v1` | none or Chronik later | Leitstand | best-effort |
+| legacy-router | old `{type, source, payload}` events | none | surviving configured consumers for explicit broadcast types | preserve envelope compatibility without resurrecting deleted targets |
 
 ## Event scope v0
 

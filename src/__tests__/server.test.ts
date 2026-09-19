@@ -120,28 +120,28 @@ describe('Server', () => {
         payload: {
           url: 'https://github.com/org/repo/releases/download/v1/obs.json',
           sha: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-          schema_ref: 'https://schemas.heimgewebe.org/contracts/knowledge/observatory.schema.json',
+          schema_ref: 'https://schemas.heimgewebe.org/contracts/knowledge.observatory.schema.json',
           generated_at: '2023-10-27T10:00:00Z',
         },
       };
 
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
+      await new Promise(process.nextTick);
 
-      // Verify fetch was called 4 times (fanout)
-      expect(fetchMock).toHaveBeenCalledTimes(4);
-
-      // Verify payload was passed through correctly to one of the consumers (e.g. Heimgeist)
-      const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://heimgeist.local');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://leitstand.local');
       expect(callArgs).toBeDefined();
 
       const sentBody = JSON.parse(callArgs![1].body);
       expect(sentBody.payload).toEqual(payload.payload);
       expect(sentBody.payload).toHaveProperty('sha', payload.payload.sha);
       expect(sentBody.payload).toHaveProperty('schema_ref', payload.payload.schema_ref);
+      expect(fetchMock.mock.calls.map(([url]) => url).sort()).toEqual(
+        ['http://chronik.local', 'http://leitstand.local'].sort(),
+      );
     });
-
-    it('should forward unknown event types only to Heimgeist', async () => {
+    it('should not implicitly forward unknown event types after deleted-consumer cutover', async () => {
       const payload = {
         type: 'test.event',
         source: 'test-suite',
@@ -151,27 +151,11 @@ describe('Server', () => {
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
+      await new Promise(process.nextTick);
 
-      // Verify fetch was called 1 time (only heimgeist)
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-
-      const expectedBody = JSON.stringify(payload);
-
-      // Heimgeist: No token configured
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: expectedBody,
-      }));
-
-      // Other consumers should not receive unknown event types
-      const urls = fetchMock.mock.calls.map(([url]) => url);
-      expect(urls).toEqual(['http://heimgeist.local']);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
-
-    it('should forward knowledge.observatory.published.v1 event to all configured consumers (fanout)', async () => {
+    it('should forward knowledge.observatory.published.v1 only to surviving configured consumers', async () => {
       const payload = {
         type: 'knowledge.observatory.published.v1',
         source: 'test-suite',
@@ -183,22 +167,10 @@ describe('Server', () => {
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
+      await new Promise(process.nextTick);
 
-      // Verify fetch was called 4 times (heimgeist, leitstand, hauski, chronik)
-      expect(fetchMock).toHaveBeenCalledTimes(4);
-
+      expect(fetchMock).toHaveBeenCalledTimes(2);
       const expectedBody = JSON.stringify(payload);
-
-      // Heimgeist
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: expectedBody,
-      }));
-
-      // Leitstand
       expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', expect.objectContaining({
         method: 'POST',
         headers: {
@@ -207,18 +179,6 @@ describe('Server', () => {
         },
         body: expectedBody,
       }));
-
-      // hauski
-      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer hauski-secret-token',
-        },
-        body: expectedBody,
-      }));
-
-      // Chronik
       expect(fetchMock).toHaveBeenCalledWith('http://chronik.local', expect.objectContaining({
         method: 'POST',
         headers: {
@@ -227,14 +187,13 @@ describe('Server', () => {
         },
         body: expectedBody,
       }));
-
-      // Verify no errors or warnings for successful forward
-      await new Promise(process.nextTick);
+      const urls = fetchMock.mock.calls.map(([url]) => url);
+      expect(urls).not.toContain('http://heimgeist.local');
+      expect(urls).not.toContain('http://hauski.local');
       expect(logger.warn).not.toHaveBeenCalled();
       expect(logger.error).not.toHaveBeenCalled();
     });
-
-    it('should forward integrity.summary.published.v1 event to all configured consumers (fanout)', async () => {
+    it('should forward integrity.summary.published.v1 only to surviving configured consumers', async () => {
       const payload = {
         type: 'integrity.summary.published.v1',
         source: 'semantAH',
@@ -249,76 +208,42 @@ describe('Server', () => {
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
       expect(response.body).toEqual({ status: 'accepted' });
+      await new Promise(process.nextTick);
 
-      // Verify fetch was called 4 times (heimgeist, leitstand, hauski, chronik)
-      expect(fetchMock).toHaveBeenCalledTimes(4);
-
+      expect(fetchMock).toHaveBeenCalledTimes(2);
       const expectedBody = JSON.stringify(payload);
-
-      // Heimgeist
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: expectedBody,
-      }));
-
-      // Leitstand
       expect(fetchMock).toHaveBeenCalledWith('http://leitstand.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer leitstand-secret-token',
-        },
         body: expectedBody,
       }));
-
-      // hauski
-      expect(fetchMock).toHaveBeenCalledWith('http://hauski.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer hauski-secret-token',
-        },
-        body: expectedBody,
-      }));
-
-      // Chronik
       expect(fetchMock).toHaveBeenCalledWith('http://chronik.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Auth': 'chronik-secret-token',
-        },
         body: expectedBody,
       }));
+      const urls = fetchMock.mock.calls.map(([url]) => url);
+      expect(urls).not.toContain('http://heimgeist.local');
+      expect(urls).not.toContain('http://hauski.local');
     });
-
     it('should forward body strictly without injected keys (pass-through guardrail)', async () => {
       const payload = {
-        type: 'test.guardrail.event',
+        type: 'knowledge.observatory.published.v1',
         source: 'test-source',
         payload: { some: 'data' },
       };
 
       await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
+      await new Promise(process.nextTick);
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      const callArgs = fetchMock.mock.calls[0];
-      const requestBody = JSON.parse(callArgs[1].body);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://leitstand.local');
+      expect(callArgs).toBeDefined();
+      const requestBody = JSON.parse(callArgs![1].body);
 
-      // Explicitly check that only the expected keys are present
       expect(Object.keys(requestBody).sort()).toEqual(
         ['payload', 'source', 'type'].sort(),
       );
-
-      // Explicitly check absence of common injected keys
       expect(requestBody).not.toHaveProperty('eventId');
       expect(requestBody).not.toHaveProperty('timestamp');
       expect(requestBody).not.toHaveProperty('ts');
     });
-
     it('should log payload size instead of preview in Received event', async () => {
       const payload = {
         type: 'test.event',
@@ -328,27 +253,19 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
-      // Only Heimgeist should receive 'test.event'
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await new Promise(process.nextTick);
+      expect(fetchMock).not.toHaveBeenCalled();
 
-      // Verify that logger.info was called with the payload size
       const calls = (logger.info as jest.Mock).mock.calls;
       const receivedEventLog = calls.find(args => args[1] === 'Received event');
       expect(receivedEventLog).toBeDefined();
-
-      // Use non-null assertion consistent with codebase conventions
       const logContext = receivedEventLog![0];
-
-      // Verify we found the correct log entry
       expect(logContext.type).toBe('test.event');
       expect(logContext.source).toBe('test-suite');
-
-      // Verify payload_size is present and payload preview is absent
       expect(logContext.payload_size).toBeGreaterThan(300);
       expect(logContext.payload_size_kind).toBe('json');
       expect(logContext.payload).toBeUndefined();
     });
-
     it('should log payload_size as null and kind as unavailable for non-JSON payloads', async () => {
       // Bypassing body parsing to test the internal processEvent logic with a function
       const payloadWithFunction = {
@@ -369,7 +286,7 @@ describe('Server', () => {
       expect(logContext.payload_size_kind).toBe('unavailable');
     });
 
-    it('should trim whitespace from type and source before forwarding', async () => {
+    it('should trim whitespace from type and source before routing', async () => {
       const payload = {
         type: '   padded.event  ',
         source: '  padded-source ',
@@ -378,54 +295,39 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
+      await new Promise(process.nextTick);
 
-      const expectedBody = JSON.stringify({
-        type: 'padded.event',
-        source: 'padded-source',
-        payload: { foo: 'bar' },
-      });
-
-      // Since type is not 'knowledge.observatory.published.v1', only Heimgeist should be called
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: expectedBody,
-      }));
-
+      expect(fetchMock).not.toHaveBeenCalled();
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'padded.event',
           source: 'padded-source',
         }),
-        'Received event'
+        'Received event',
       );
     });
-
-    it('should handle one consumer failure gracefully (fire and forget)', async () => {
-      // First call (heimgeist) fails, others succeed
+    it('should handle one surviving consumer failure gracefully (fire and forget)', async () => {
       fetchMock
         .mockRejectedValueOnce(new Error('Network error'))
         .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
 
       const payload = {
-        type: 'test.event',
+        type: 'knowledge.observatory.published.v1',
         source: 'test-suite',
         payload: { foo: 'bar' },
       };
 
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
-      expect(response.status).toBe(202); // Still 202 because we don't wait/fail on forward error
-
-      // Wait a tick for the async promise to reject and be caught
+      expect(response.status).toBe(202);
       await new Promise(process.nextTick);
 
-      // One failure should be logged
-      expect(logger.error).toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ log_kind: 'best_effort_forward_failed' }),
+        expect.stringContaining('[Best-Effort]'),
+      );
+      expect(logger.error).not.toHaveBeenCalled();
     });
-
     it('should reject missing type', async () => {
       const payload = {
         source: 'test-suite',
@@ -540,25 +442,23 @@ describe('Server', () => {
       }
     });
 
-    it('should normalize mixed-case types to lowercase', async () => {
-        const payload = {
-            type: 'Test.Event.Mixed.Case',
-            source: 'test',
-            payload: {}
-        };
+    it('should normalize mixed-case broadcast types to lowercase', async () => {
+      const payload = {
+        type: 'Knowledge.Observatory.Published.V1',
+        source: 'test',
+        payload: {},
+      };
 
-        const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
-        expect(response.status).toBe(202);
+      const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
+      expect(response.status).toBe(202);
+      await new Promise(process.nextTick);
 
-        // Verify forwarding was done with lowercase type
-        const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://heimgeist.local');
-        expect(callArgs).toBeDefined();
-        const sentBody = JSON.parse(callArgs![1].body);
-        expect(sentBody.type).toBe('test.event.mixed.case');
+      const callArgs = fetchMock.mock.calls.find(call => call[0] === 'http://leitstand.local');
+      expect(callArgs).toBeDefined();
+      const sentBody = JSON.parse(callArgs![1].body);
+      expect(sentBody.type).toBe('knowledge.observatory.published.v1');
     });
-
-    it('should support insights.daily.published event (notification only)', async () => {
-      // This test codifies the contract for the daily insights notification event
+    it('should accept insights.daily.published without resurrecting a deleted implicit consumer', async () => {
       const payload = {
         type: 'insights.daily.published',
         source: 'semantAH',
@@ -571,31 +471,18 @@ describe('Server', () => {
 
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
+      await new Promise(process.nextTick);
+      expect(fetchMock).not.toHaveBeenCalled();
 
-      expect(fetchMock).toHaveBeenCalledWith('http://heimgeist.local', expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      }));
-
-      // Verify that we are not trying to act as a file host (payload should be small)
-      // The payload must be serializable for this test to pass logically
       expect(JSON.stringify(payload.payload).length).toBeLessThan(1000);
-
-      // Verify URL pattern matches the stable release asset location (not 'latest')
       expect(payload.payload.url).toMatch(
         /^https:\/\/github\.com\/heimgewebe\/semantAH\/releases\/download\/insights-daily\//,
       );
-
-      // Verify timestamp formats match contract
       expect(payload.payload.ts).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(payload.payload.generated_at).toMatch(
         /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/,
       );
     });
-
     it('should explicitly treat integrity.summary.published.v1 as best-effort (warn instead of error)', async () => {
       // This test ensures that the "best-effort" contract for integrity events is technically upheld.
 
@@ -634,40 +521,25 @@ describe('Server', () => {
       expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Event forwarded');
     });
 
-    it('should treat insights.daily.published events as critical (log error on failure)', async () => {
-      // Force all consumers to fail
+    it('should not resurrect a retired critical consumer for insights.daily.published', async () => {
       fetchMock.mockRejectedValue(new Error('Network Down'));
-
       const payload = {
         type: 'insights.daily.published',
         source: 'semantAH',
-        payload: {
-          url: 'https://example.com/insights.json',
-        },
+        payload: { url: 'https://example.com/insights.json' },
       };
 
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
-
-      // Wait a tick for the async promise rejection handling (logging)
       await new Promise(process.nextTick);
 
-      // Verify Heimgeist failure was logged as an error (Critical Push)
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.stringContaining('Error forwarding event to Heimgeist')
-      );
-
-      // Verify no warnings for others (since insights.daily is NOT broadcasted to others)
+      expect(fetchMock).not.toHaveBeenCalled();
       expect(logger.warn).not.toHaveBeenCalledWith(
         expect.anything(),
-        expect.stringContaining('[Best-Effort]')
+        expect.stringContaining('[Best-Effort]'),
       );
-
-      // Verify "Event forwarded" success log is NOT called
-      expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Event forwarded');
+      expect(logger.error).not.toHaveBeenCalled();
     });
-
     it('should explicitly treat integrity.summary.published.v1 as best-effort on non-2xx response (warn instead of error)', async () => {
       // Mock 500 Internal Server Error response (non-reject path)
       fetchMock.mockResolvedValue({
@@ -750,7 +622,7 @@ describe('Server', () => {
   });
 
   describe('Error logging', () => {
-    it('should log "token rejected" when receiving 401 or 403', async () => {
+    it('should log "token rejected" as a best-effort warning for surviving observers', async () => {
       fetchMock.mockResolvedValue({
         ok: false,
         status: 403,
@@ -765,38 +637,32 @@ describe('Server', () => {
       };
 
       await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
-
-      // Wait for async processing
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.objectContaining({}),
-        expect.stringContaining('token rejected')
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ log_kind: 'best_effort_forward_failed' }),
+        expect.stringContaining('token rejected'),
       );
+      expect(logger.error).not.toHaveBeenCalled();
     });
-
-    it('should include publisher in event forwarded logs', async () => {
+    it('should include publisher in surviving broadcast success logs', async () => {
       const payload = {
-        type: 'test.event',
+        type: 'knowledge.observatory.published.v1',
         source: 'test-source',
         payload: { foo: 'bar' },
       };
 
       const response = await request(app).post('/events').set('Authorization', 'Bearer test-plexer-token').send(payload);
       expect(response.status).toBe(202);
-
-      // Wait for async processing
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      // Check success log
       expect(logger.info).toHaveBeenCalledWith(
         expect.objectContaining({
           publisher: 'test-source',
         }),
-        'Event forwarded'
+        'Event forwarded',
       );
     });
-
     it('should include repo in event forwarded logs if present in payload', async () => {
       const payload = {
         type: 'integrity.summary.published.v1',
